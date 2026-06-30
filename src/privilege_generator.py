@@ -168,7 +168,9 @@ class PrivilegeGenerator:
         return None
 
 
-def save_report_json(report, filename="usr001_access.json"):
+def save_report_json(report, login="usr001", filename=None):
+    if filename is None:
+        filename = f"{login}_access.json"
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     filepath = os.path.join(OUTPUT_DIR, filename)
     serializable = {}

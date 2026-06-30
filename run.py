@@ -144,7 +144,7 @@ def error(text):
     print(f"  {C['red']}✗ {text}{C['reset']}")
 
 
-def run_mapping(login="usr001"):
+def run_mapping(login):
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
     section("CONEXAO")
@@ -167,17 +167,17 @@ def run_mapping(login="usr001"):
             if report is None:
                 print()
                 error("Falha ao mapear usuario. Verifique o login e a conexao.")
-                return None, None
+                return None, None, login
 
             report["_conn"] = conn
 
             section("SALVANDO")
             spin("Gerando relatorio JSON...", 0.4)
-            json_path = save_report_json(report)
+            json_path = save_report_json(report, login)
             ok()
             success(f"Relatorio salvo em: {C['bold']}{json_path}{C['reset']}")
 
-            return report, schema
+            return report, schema, login
 
     except Exception as e:
         fail(str(e))
@@ -185,23 +185,24 @@ def run_mapping(login="usr001"):
         info("  - SQL Server esta rodando?")
         info("  - ODBC Driver 17 instalado?")
         info("  - Credenciais corretas?")
-        return None, None
+        return None, None, login
 
 
-def run_generate_privileges(report, schema):
+def run_generate_privileges(report, schema, login):
     if report is None:
         warn("Sem dados de mapeamento. Execute a opcao 1 primeiro.")
         return
 
     section("PRIVILEGIOS")
     info("Gerando script SQL...")
-    rule_name = input(f"  {C['bold']}Nome do grupo de regras [{C['dim']}ACESSOS_USR001{C['reset']}]:{C['reset']} ").strip()
+    default_rule = f"ACESSOS_{login.upper()[:8]}"
+    rule_name = input(f"  {C['bold']}Nome do grupo de regras [{C['dim']}{default_rule}{C['reset']}]:{C['reset']} ").strip()
     if not rule_name:
-        rule_name = "ACESSOS_USR001"
+        rule_name = default_rule
 
     generator = PrivilegeGenerator(report, schema)
     sql = generator.generate_sql(rule_name)
-    sql_path = generator.save_sql(sql)
+    sql_path = generator.save_sql(sql, f"{login}_privileges.sql")
 
     ok()
     success(f"Script SQL salvo em: {C['bold']}{sql_path}{C['reset']}")
@@ -217,10 +218,10 @@ def run_generate_privileges(report, schema):
     print(f"  {C['cyan']}{'─' * 45}{C['reset']}")
 
 
-def run_dashboard():
-    json_path = os.path.join(OUTPUT_DIR, "usr001_access.json")
+def run_dashboard(login):
+    json_path = os.path.join(OUTPUT_DIR, f"{login}_access.json")
     if not os.path.exists(json_path):
-        warn("Arquivo JSON nao encontrado. Execute a opcao 1 ou 3 primeiro.")
+        warn(f"Arquivo JSON nao encontrado: {json_path}. Execute a opcao 1 ou 3 primeiro.")
         return
 
     section("DASHBOARD")
@@ -244,6 +245,7 @@ def spin(text, duration=1.0):
 def main():
     report = None
     schema = None
+    current_login = "usr001"
     first_run = True
 
     while True:
@@ -264,18 +266,21 @@ def main():
             print(f"\n  {C['yellow']}Saindo...{C['reset']}\n")
             break
 
-        elif choice == "1":
-            report, schema = run_mapping()
+        elif choice in ("1", "2", "3"):
+            login_input = input(f"  {C['bold']}Usuario{C['reset']} [{C['dim']}{current_login}{C['reset']}]: ").strip()
+            if login_input:
+                current_login = login_input
 
-        elif choice == "2":
-            report, schema = run_mapping()
-            if report:
-                run_generate_privileges(report, schema)
-
-        elif choice == "3":
-            report, schema = run_mapping()
-            if report:
-                run_dashboard()
+            if choice == "1":
+                report, schema, current_login = run_mapping(current_login)
+            elif choice == "2":
+                report, schema, current_login = run_mapping(current_login)
+                if report:
+                    run_generate_privileges(report, schema, current_login)
+            elif choice == "3":
+                report, schema, current_login = run_mapping(current_login)
+                if report:
+                    run_dashboard(current_login)
 
         else:
             print(f"\n  {C['red']}Opcao invalida!{C['reset']}\n")
