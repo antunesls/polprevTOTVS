@@ -1,0 +1,292 @@
+# polprevTOTVS
+
+**Mapeador de Acessos e Privilégios — Protheus**
+
+Ferramenta para mapear os acessos de um usuário do Protheus ERP, listando menus, rotinas, funcionalidades de browse e privilégios configurados. Gera relatório JSON, script SQL para criação de regras e dashboard HTML interativo.
+
+---
+
+## Funcionalidades
+
+| Opção | Descrição |
+|-------|-----------|
+| **1. Mapear acessos** | Conecta ao banco, descobre a estrutura das tabelas, mapeia menus, rotinas e funcionalidades do usuário. Gera `output/{login}_access.json` |
+| **2. Mapear + Privilégios** | Além do mapeamento, gera script SQL para criar um novo grupo de privilégios (`SYS_RULES`) baseado nos acessos do usuário. Gera `output/{login}_privileges.sql` |
+| **3. Mapear + Dashboard** | Mapeia e gera dashboard HTML com gráficos, árvore de menu e tabela pesquisável. Gera `output/dashboard.html` |
+
+### Destaques do mapeamento
+
+- **Módulos**: apenas módulos com `USR_ACESSO = 'T'` (permitidos)
+- **Rotinas**: apenas itens ativos (`I_STATUS = '1'`) com função associada
+- **Funcionalidades de Browse**: parse do `I_ACCESS` (10 posições) e cross-reference com `RL__MENUOPER` do `SYS_RULES_FEATURES`
+- **Overrides de perfil**: leitura do `MP_SYSTEM_PROFILE` (ACBROWSE) para bloqueios por usuário — pastas com status `D` desabilitam toda a subárvore
+- **Privilégios**: mapeamento de regras por grupo (`SYS_RULES_GRP_RULES`) e por usuário (`SYS_RULES_USR_RULES`)
+
+---
+
+## Arquitetura
+
+```
+polprevTOTVS/
+├── run.py                          # CLI principal (menu interativo, ASCII art, spinner)
+├── polprevTOTVS.ps1                # Script PowerShell para setup (venv + execução)
+├── requirements.txt                # pyodbc>=5.0.0
+├── src/
+│   ├── __init__.py
+│   ├── config.py                   # DB_CONFIG, SCHEMA_TABLES, OUTPUT_DIR
+│   ├── database.py                 # Conexão MSSQL, fetch_dicts, fetch_all
+│   ├── discovery.py                # Descoberta de colunas via INFORMATION_SCHEMA
+│   ├── user_mapper.py              # Mapeamento principal (menus, rotinas, privilégios, ACBROWSE)
+│   ├── privilege_generator.py      # Geração de script SQL para SYS_RULES
+│   ├── dashboard.py                # Geração de dashboard HTML (Chart.js)
+│   └── diagnose_columns.py         # Diagnóstico de colunas vs candidatos
+└── output/                         # (gerado) Relatórios e dashboard
+    ├── {login}_access.json
+    ├── {login}_privileges.sql
+    └── dashboard.html
+```
+
+---
+
+## Tabelas utilizadas
+
+| # | Tabela | Descrição | Uso no projeto |
+|---|--------|-----------|----------------|
+| 1 | `SYS_USR` | Usuários do sistema | Buscar usuário por `USR_CODIGO`, obter `USR_ID` |
+| 2 | `SYS_USR_MODULE` | Módulos/menus atribuídos ao usuário | Filtrar por `USR_ACESSO = 'T'` para obter módulos permitidos; `USR_MODULO` → `M_MODULE` |
+| 3 | `SYS_USR_ACCESS` | Códigos de acesso por usuário | Controle adicional de acesso (`USR_CODACESSO`) — não usado ativamente no mapeamento |
+| 4 | `SYS_USR_GROUPS` | Associação usuário → grupo | Obter `USR_GRUPO` para buscar privilégios do grupo |
+| 5 | `SYS_GRP_GROUP` | Grupos de usuários | Nome do grupo (`GR__NOME`) via `GR__ID` |
+| 6 | `SYS_RULES` | Regras de privilégio | `RL__CODIGO` (nome), `RL__DESCRI` (descrição) |
+| 7 | `SYS_RULES_FEATURES` | Funcionalidades por rotina | `RL__MENUOPER` (nº da operação), `RL__DESMDEF` (nome da feature), `RL__ACESSO` (1=permitido, 3=negado), `RL__MENUDEF` (função interna) |
+| 8 | `SYS_RULES_BUTTONS` | Botões das regras | Não usado ativamente no mapeamento |
+| 9 | `SYS_RULES_GRP_RULES` | Associação grupo → regra | `GROUP_ID` → `GR__RL_ID` |
+| 10 | `SYS_RULES_USR_RULES` | Associação usuário → regra | `USER_ID` → `USR_RL_ID` |
+| 11 | `MPMENU_MENU` | Menus do sistema | `M_ID`, `M_NAME`, `M_MODULE` — join com `USR_MODULO` |
+| 12 | `MPMENU_ITEM` | Itens de menu | `I_TP_MENU` (1=pasta, 2=browse), `I_ACCESS` (10 posições de features), `I_STATUS` (1=ativo), `I_ID_FUNC` → `F_ID` |
+| 13 | `MPMENU_FUNCTION` | Funções/rotinas | `F_ID` → `F_FUNCTION` (ex: MATA010) |
+| 14 | `MPMENU_I18N` | Descrições internacionalizadas | `N_DESC` (descrição), `N_LANG` (idioma), `N_PAREN_ID` → `I_ID` |
+| 15 | `MP_SYSTEM_PROFILE` | Perfil do sistema | `P_TYPE = 'ACBROWSE'` — overrides de funcionalidades por usuário em `P_DEFS` (binário) |
+
+### Colunas principais por tabela
+
+**SYS_USR:** `USR_ID`, `USR_CODIGO`, `USR_NOME`, `D_E_L_E_T_`, `R_E_C_N_O_`
+
+**SYS_USR_MODULE:** `USR_ID`, `USR_ACESSO`, `USR_MODULO`, `USR_CODMOD`, `D_E_L_E_T_`
+
+**SYS_USR_GROUPS:** `USR_ID`, `USR_GRUPO`, `D_E_L_E_T_`
+
+**SYS_GRP_GROUP:** `GR__ID`, `GR__NOME`, `GR__CODIGO`
+
+**SYS_RULES:** `RL__ID`, `RL__CODIGO`, `RL__DESCRI`
+
+**SYS_RULES_FEATURES:** `RL__ID`, `RL__ROTINA`, `RL__ITEM`, `RL__ACESSO`, `RL__MENUOPER`, `RL__DESMDEF`, `RL__MENUDEF`
+
+**SYS_RULES_GRP_RULES:** `GROUP_ID`, `GR__RL_ID`
+
+**SYS_RULES_USR_RULES:** `USER_ID`, `USR_RL_ID`
+
+**MPMENU_MENU:** `M_ID`, `M_NAME`, `M_MODULE`
+
+**MPMENU_ITEM:** `I_ID`, `I_ID_MENU`, `I_FATHER`, `I_ID_FUNC`, `I_TP_MENU`, `I_ACCESS`, `I_STATUS`
+
+**MPMENU_FUNCTION:** `F_ID`, `F_FUNCTION`
+
+**MPMENU_I18N:** `N_PAREN_TP`, `N_PAREN_ID`, `N_LANG`, `N_DESC`
+
+**MP_SYSTEM_PROFILE:** `P_NAME`, `P_PROG`, `P_TASK`, `P_TYPE`, `P_DEFS` (varbinary)
+
+---
+
+## Fluxo de mapeamento
+
+```
+┌──────────────────────────────────────────────────┐
+│ 1. find_user(login)                              │
+│    └─ SELECT USR_ID, USR_CODIGO FROM SYS_USR     │
+│       WHERE USR_CODIGO = ?                       │
+├──────────────────────────────────────────────────┤
+│ 2. map_menu_modules(user_id)                     │
+│    └─ SELECT USR_MODULO FROM SYS_USR_MODULE      │
+│       WHERE USR_ID = ? AND USR_ACESSO = 'T'      │
+├──────────────────────────────────────────────────┤
+│ 3. map_menu_tree(menu_ids)                       │
+│    └─ SELECT M_ID, M_NAME FROM MPMENU_MENU       │
+│       WHERE M_MODULE IN (?)                      │
+│    └─ _map_menu_items (MPMENU_ITEM +             │
+│       MPMENU_FUNCTION + MPMENU_I18N)             │
+│       └─ I_ACCESS → browse_features              │
+├──────────────────────────────────────────────────┤
+│ 4. map_user_groups(user_id)                      │
+│    └─ SYS_USR_GROUPS → SYS_GRP_GROUP             │
+├──────────────────────────────────────────────────┤
+│ 5. map_group_privileges +                        │
+│    map_user_privileges_direct                    │
+│    └─ SYS_RULES_GRP_RULES → SYS_RULES →          │
+│       SYS_RULES_FEATURES (RL__MENUOPER)           │
+├──────────────────────────────────────────────────┤
+│ 6. map_system_profile(user_id)                   │
+│    └─ MP_SYSTEM_PROFILE (P_TYPE='ACBROWSE')     │
+│       └─ Parse P_DEFS binário                    │
+│       └─ D/E → status de pastas                  │
+│       └─ "xxx xxxxxx" → override de features    │
+├──────────────────────────────────────────────────┤
+│ 7. Consolidar → routines_summary                 │
+│    └─ I_ACCESS ∩ ACBROWSE ∩ RL__MENUOPER        │
+│    └─ browse_permissions[] por rotina            │
+│    └─ disabled_by_acbrowse flag                  │
+└──────────────────────────────────────────────────┘
+```
+
+---
+
+## Funcionalidades de Browse
+
+As 10 posições do `I_ACCESS` correspondem às operações do menu (ordem de exibição padrão Protheus):
+
+| Pos | OP | Nome padrão |
+|-----|-----|-------------|
+| 0 | 1 | Pesquisar |
+| 1 | 2 | Visualizar |
+| 2 | 3 | Incluir |
+| 3 | 4 | Alterar |
+| 4 | 5 | Excluir |
+| 5 | 6 | Cod.Barra |
+| 6 | 7 | Copiar |
+| 7 | 8 | Retornar |
+| 8 | 9 | Prep.Doc.Saida |
+| 9 | 10 | Extra |
+
+- `x` = disponível, ` ` (espaço) = indisponível
+- O `RL__MENUOPER` em `SYS_RULES_FEATURES` faz o link numérico: `RL__MENUOPER = pos + 1`
+- Overrides do `MP_SYSTEM_PROFILE` (ACBROWSE) sobrescrevem o `I_ACCESS` por usuário
+
+---
+
+## Dashboard HTML
+
+O dashboard (`output/dashboard.html`) é autocontido e inclui:
+
+- **5 KPI cards**: Menus, Rotinas, Rotinas Permitidas, Grupos, Bloqueadas
+- **Gráfico de barras**: Top 15 prefixos de função (MATA, COMS, etc.)
+- **Gráfico doughnut**: Acessíveis vs Bloqueadas (Perfil)
+- **Árvore de menu**: Hierarquia colapsável com `father_id`
+- **Tabela pesquisável**: 146 rotinas com Status, Privilégio e Browse OPs
+- **Tema escuro**: Estilo GitHub Dark
+
+---
+
+## Como executar
+
+```powershell
+# Via PowerShell (cria .venv, instala dependências)
+.\polprevTOTVS.ps1
+
+# Ou manualmente
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+python run.py
+```
+
+### Menu interativo
+
+```
+╔══════════════════════════════════════════╗
+║  1 │ Apenas mapear acessos              ║
+║  2 │ Mapear + Gerar privilégios         ║
+║  3 │ Mapear + Dashboard HTML            ║
+║  0 │ Sair                               ║
+╚══════════════════════════════════════════╝
+
+Opcao: 1
+
+Usuario [usr001]: ← ENTER para padrão ou digite outro
+```
+
+---
+
+## Pré-requisitos
+
+- **Python** 3.8+
+- **pyodbc** 5.0+
+- **ODBC Driver 17 for SQL Server** (ou superior)
+- **Banco Protheus** com as tabelas de sistema acessíveis
+- **Credenciais** configuradas em `src/config.py`
+
+---
+
+## Configuração
+
+Editar `src/config.py`:
+
+```python
+DB_CONFIG = {
+    "server": "localhost",
+    "database": "TOTVS_2510",
+    "username": "TOTVS12",
+    "password": "TOTVS12",
+    "driver": "ODBC Driver 17 for SQL Server",
+}
+
+OUTPUT_DIR = "output"
+
+SCHEMA_TABLES = [
+    "SYS_USR", "SYS_USR_MODULE", "SYS_USR_ACCESS", "SYS_USR_GROUPS",
+    "SYS_GRP_GROUP", "SYS_RULES", "SYS_RULES_FEATURES", "SYS_RULES_BUTTONS",
+    "SYS_RULES_GRP_RULES", "SYS_RULES_USR_RULES",
+    "MPMENU_MENU", "MPMENU_ITEM", "MPMENU_FUNCTION", "MPMENU_I18N",
+]
+```
+
+> **Nota:** `MP_SYSTEM_PROFILE` não está em `SCHEMA_TABLES` pois é consultada dinamicamente via SQL direto.
+
+---
+
+## Output
+
+```
+output/
+├── usr001_access.json       # Relatório completo (rotinas, features, browse permissions)
+├── usr001_privileges.sql    # Script SQL para criar regra no SYS_RULES
+└── dashboard.html           # Dashboard gráfico interativo
+```
+
+### Estrutura do JSON
+
+```json
+{
+  "user": "usr001",
+  "user_id": "000002",
+  "total_menus": 1,
+  "total_routines": 146,
+  "groups": [],
+  "menus": [{ "menu_id": "...", "menu_name": "SIGACOM", "items": [...] }],
+  "routines_summary": [
+    {
+      "routine": "MATA010",
+      "description": "Produtos",
+      "menu_name": "SIGACOM",
+      "has_explicit_privilege": false,
+      "disabled_by_acbrowse": true,
+      "browse_permissions": [
+        { "pos": 0, "menu_oper": 1, "available": false, "features": [] },
+        ...
+      ]
+    }
+  ],
+  "privileges_raw": {}
+}
+```
+
+---
+
+## Diagnóstico de colunas
+
+O script `src/diagnose_columns.py` compara os candidatos de colunas do projeto com as colunas reais do banco, gerando relatório de matches/mismatches:
+
+```powershell
+python src/diagnose_columns.py
+```
+
+Relatório salvo em `output/diagnose_columns.json`.
