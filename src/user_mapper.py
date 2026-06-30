@@ -30,21 +30,69 @@ class UserMapper:
         pk = self.resolve_col("SYS_USR", pk_candidates)
         login_candidates = ["USR_CODIGO", "USR_LOGIN", "LOGIN", "USR_USERNAME", "USR_COD"]
         login_col = self.resolve_col("SYS_USR", login_candidates)
+        depto_candidates = ["USR_DEPTO", "USR_DEPT", "DEPTO", "DEPARTMENT"]
+        depto_col = self.resolve_col("SYS_USR", depto_candidates)
 
         if not pk or not login_col:
             print("  \033[93m[!]\033[0m Nao foi possivel identificar colunas em SYS_USR")
             return None
 
+        select_cols = [pk, login_col]
+        if depto_col:
+            select_cols.append(depto_col)
+
         rows = fetch_dicts(self.conn,
-            f"SELECT {pk}, {login_col} FROM SYS_USR WHERE {login_col} = ?",
+            f"SELECT {', '.join(select_cols)} FROM SYS_USR WHERE {login_col} = ?",
             (login,))
         if not rows:
             print(f"  \033[93m[!]\033[0m Usuario '\033[1m{login}\033[0m' nao encontrado em SYS_USR")
             return None
 
         user = rows[0]
-        print(f"  \033[92m[OK]\033[0m Usuario: \033[1m{user[login_col].strip()}\033[0m (ID: {user[pk]})")
-        return {"id": user[pk], "login": user[login_col], "pk_col": pk}
+        depto_info = f" (Depto: {user[depto_col].strip()})" if depto_col and user.get(depto_col) and user[depto_col].strip() else ""
+        print(f"  \033[92m[OK]\033[0m Usuario: \033[1m{user[login_col].strip()}\033[0m (ID: {user[pk]}){depto_info}")
+        return {"id": user[pk], "login": user[login_col], "pk_col": pk, "depto": user.get(depto_col, "").strip() if depto_col else ""}
+
+    def list_non_blocked_users(self):
+        pk_candidates = ["USR_ID", "ID"]
+        pk = self.resolve_col("SYS_USR", pk_candidates)
+        login_candidates = ["USR_CODIGO", "USR_LOGIN", "LOGIN", "USR_USERNAME", "USR_COD"]
+        login_col = self.resolve_col("SYS_USR", login_candidates)
+        block_candidates = ["USR_MSBLQL", "USR_BLOQUEIO", "USR_BLOCKED", "USR_STATUS", "USR_ATIVO"]
+        block_col = self.resolve_col("SYS_USR", block_candidates)
+        del_col = self.resolve_col("SYS_USR", ["D_E_L_E_T_"])
+        depto_candidates = ["USR_DEPTO", "USR_DEPT", "DEPTO", "DEPARTMENT"]
+        depto_col = self.resolve_col("SYS_USR", depto_candidates)
+
+        if not pk or not login_col:
+            print("  \033[93m[!]\033[0m Nao foi possivel identificar colunas em SYS_USR")
+            return []
+
+        select_cols = [pk, login_col]
+        if depto_col:
+            select_cols.append(depto_col)
+
+        where = "1=1"
+        params = []
+
+        if block_col:
+            where += f" AND {block_col} = ?"
+            params.append("2")
+
+        if del_col:
+            where += f" AND {del_col} = ?"
+            params.append(" ")
+
+        rows = fetch_dicts(self.conn,
+            f"SELECT {', '.join(select_cols)} FROM SYS_USR WHERE {where}",
+            params)
+
+        users = [{"id": row[pk], "login": row[login_col].strip() if row[login_col] else "",
+                  "depto": row[depto_col].strip() if depto_col and row.get(depto_col) else ""}
+                 for row in rows]
+
+        print(f"  \033[92m[OK]\033[0m Usuarios nao bloqueados encontrados: \033[1m{len(users)}\033[0m")
+        return users
 
     def map_menu_modules(self, user_id):
         usr_col = self.resolve_col("SYS_USR_MODULE", ["USR_ID", "UMD_USR_ID", "USM_USR_ID"])
@@ -602,6 +650,7 @@ class UserMapper:
         report = {
             "user": login,
             "user_id": user["id"],
+            "user_depto": user.get("depto", ""),
             "total_menus": len(menu_tree),
             "total_routines": len(routines_flat),
             "groups": groups,

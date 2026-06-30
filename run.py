@@ -7,9 +7,9 @@ import threading
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from src.database import get_connection
+from src.database import get_connection, build_connection_string
 from src.discovery import discover_columns_for_tables, print_schema_summary
-from src.config import SCHEMA_TABLES, OUTPUT_DIR
+from src.config import SCHEMA_TABLES, OUTPUT_DIR, DB_CONFIG, PRIVILEGE_MODE, EMPRESA_NAME, load_user_config, save_user_config
 from src.user_mapper import UserMapper
 from src.privilege_generator import PrivilegeGenerator, save_report_json
 from src.dashboard import generate_html
@@ -110,6 +110,8 @@ def menu():
     print(row(f"{L}║{R}    │ {D}Relatorio JSON + Script SQL p/ SYS_RULES{R}"))
     print(row(f"{L}║{R}  {B}3{R} │ {W}Mapear + Gerar dashboard HTML{R}"))
     print(row(f"{L}║{R}    │ {D}Relatorio JSON + Dashboard grafico{R}"))
+    print(row(f"{L}║{R}  {B}4{R} │ {W}Parametrizacao{R}"))
+    print(row(f"{L}║{R}    │ {D}Configurar banco e preferencias{R}"))
     print(row(f"{L}║{R}  {B}0{R} │ {RD}Sair{R}"))
     print(f"  {L}╚{'═' * BOX}╝{R}")
     print()
@@ -242,6 +244,284 @@ def spin(text, duration=1.0):
         i += 1
 
 
+def run_batch(choice):
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+    section("CONEXAO")
+    spin("Conectando ao banco MSSQL...", 0.6)
+    try:
+        with get_connection() as conn:
+            ok("Conectado com sucesso!")
+
+            section("DISCOVERY")
+            spin("Descobrindo estrutura das tabelas...", 1.0)
+            schema = discover_columns_for_tables(SCHEMA_TABLES, conn)
+            ok()
+            print_schema_summary(schema)
+
+            section("BATCH")
+            mapper = UserMapper(schema, conn)
+            users = mapper.list_non_blocked_users()
+
+            if not users:
+                warn("Nenhum usuario nao bloqueado encontrado.")
+                return
+
+            success_count = 0
+            fail_count = 0
+            total = len(users)
+
+            print(f"\n  {C['cyan']}{chr(0x250C)}{'─' * 45}{chr(0x2510)}{C['reset']}")
+
+            for i, user in enumerate(users, 1):
+                login = user["login"]
+                login_display = login if login else f"ID_{user['id']}"
+                print(f"\n  {C['cyan']}[{i}/{total}]{C['reset']} \033[1m{login_display}\033[0m")
+
+                try:
+                    report = mapper.build_full_report(login)
+                    if report is None:
+                        error(f"Falha ao mapear usuario")
+                        fail_count += 1
+                        continue
+
+                    report["_conn"] = conn
+
+                    json_path = save_report_json(report, login)
+                    info(f"  JSON salvo: {json_path}")
+
+                    if choice == "2":
+                        default_rule = f"ACESSOS_{login.upper()[:8]}"
+                        generator = PrivilegeGenerator(report, schema)
+                        sql = generator.generate_sql(default_rule)
+                        sql_path = generator.save_sql(sql, f"{login}_privileges.sql")
+                        info(f"  Script SQL: {sql_path}")
+
+                    if choice == "3":
+                        html_path = generate_html(json_path)
+                        per_user_html = os.path.join(OUTPUT_DIR, f"{login}_dashboard.html")
+                        if os.path.exists(html_path):
+                            os.replace(html_path, per_user_html)
+                        info(f"  Dashboard: {per_user_html}")
+
+                    success_count += 1
+
+                except Exception as e:
+                    error(f"Erro: {e}")
+                    fail_count += 1
+
+            print(f"\n  {C['cyan']}{chr(0x2514)}{'─' * 45}{chr(0x2518)}{C['reset']}")
+            print()
+            summary_ok = f"{C['green']}Sucesso: {success_count}{C['reset']}"
+            summary_fail = f"{C['red']}Falhas: {fail_count}{C['reset']}"
+            print(f"  Processados: {total} | {summary_ok} | {summary_fail}")
+
+    except Exception as e:
+        fail(str(e))
+        warn("Verifique:")
+        info("  - SQL Server esta rodando?")
+        info("  - ODBC Driver 17 instalado?")
+        info("  - Credenciais corretas?")
+
+
+def menu_parametrizacao():
+    while True:
+        cls()
+        print(BANNER)
+        L = C["cyan"]; R = C["reset"]; B = C["bold"]; D = C["dim"]; W = C["white"]; G = C["green"]; Y = C["yellow"]; RD = C["red"]
+        BOX = 55
+
+        def row(text):
+            import re
+            v = re.sub(r"\033\[[0-9;]*m", "", text)
+            pad = BOX - len(v)
+            return f"  {text}{' ' * pad}{L}║{R}"
+
+        server_disp = DB_CONFIG["server"][:28]
+        db_disp = DB_CONFIG["database"][:28]
+        user_disp = DB_CONFIG["username"][:28]
+        pass_disp = "****"
+        driver_disp = DB_CONFIG["driver"][:28]
+        mode_disp = "POR USUARIO" if PRIVILEGE_MODE == "per_user" else "POR CAMADA ORGANIZACIONAL"
+        empresa_disp = EMPRESA_NAME[:28] if EMPRESA_NAME else "(nao definido)"
+
+        print(f"  {L}╔{'═' * BOX}╗{R}")
+        print(row(f"{L}║{R}  {B}PARAMETRIZACAO{R}"))
+        print(row(f"{L}║{R}  {D}{'─' * (BOX - 3)}{R}"))
+        print(row(f"{L}║{R}  {B}1{R} │ {W}Servidor ..........{R} [{D}{server_disp}{R}]"))
+        print(row(f"{L}║{R}  {B}2{R} │ {W}Banco de dados ....{R} [{D}{db_disp}{R}]"))
+        print(row(f"{L}║{R}  {B}3{R} │ {W}Usuario ...........{R} [{D}{user_disp}{R}]"))
+        print(row(f"{L}║{R}  {B}4{R} │ {W}Senha .............{R} [{D}{pass_disp}{R}]"))
+        print(row(f"{L}║{R}  {B}5{R} │ {W}Driver ODBC .......{R} [{D}{driver_disp}{R}]"))
+        if PRIVILEGE_MODE == "organizational_layer":
+            print(row(f"{L}║{R}  {D}{'─' * (BOX - 3)}{R}"))
+            print(row(f"{L}║{R}  {B}5{N}{R} │ {W}Nome da empresa ...{R} [{D}{empresa_disp}{R}]"))
+        print(row(f"{L}║{R}  {D}{'─' * (BOX - 3)}{R}"))
+        print(row(f"{L}║{R}  {B}6{R} │ {W}Modo de privilegio{R} [{G}{mode_disp}{R}]"))
+        print(row(f"{L}║{R}  {D}{'─' * (BOX - 3)}{R}"))
+        print(row(f"{L}║{R}  {B}7{R} │ {W}Testar conexao{R}"))
+        print(row(f"{L}║{R}  {B}8{R} │ {W}Salvar configuracoes{R}"))
+        print(row(f"{L}║{R}  {B}0{R} │ {RD}Voltar{R}"))
+        print(f"  {L}╚{'═' * BOX}╝{R}")
+        print()
+
+        try:
+            sub = input(f"  {B}Opcao:{R} ").strip()
+        except (EOFError, KeyboardInterrupt):
+            break
+
+        cls()
+
+        if sub == "0":
+            break
+
+        elif sub == "1":
+            val = input(f"  Servidor [{DB_CONFIG['server']}]: ").strip()
+            if val:
+                DB_CONFIG["server"] = val
+                success(f"Servidor alterado para: {val}")
+
+        elif sub == "2":
+            val = input(f"  Banco de dados [{DB_CONFIG['database']}]: ").strip()
+            if val:
+                DB_CONFIG["database"] = val
+                success(f"Banco alterado para: {val}")
+
+        elif sub == "3":
+            val = input(f"  Usuario [{DB_CONFIG['username']}]: ").strip()
+            if val:
+                DB_CONFIG["username"] = val
+                success(f"Usuario alterado para: {val}")
+
+        elif sub == "4":
+            val = input(f"  Senha [****]: ").strip()
+            if val:
+                DB_CONFIG["password"] = val
+                success("Senha alterada.")
+
+        elif sub == "5":
+            val = input(f"  Driver ODBC [{DB_CONFIG['driver']}]: ").strip()
+            if val:
+                DB_CONFIG["driver"] = val
+                success(f"Driver alterado para: {val}")
+
+        elif sub == "5N":
+            val = input(f"  Nome da empresa [{EMPRESA_NAME}]: ").strip()
+            if val:
+                import src.config as cfg
+                cfg.EMPRESA_NAME = val
+                success(f"Empresa alterada para: {val}")
+
+        elif sub == "6":
+            import src.config as cfg
+            if cfg.PRIVILEGE_MODE == "per_user":
+                cfg.PRIVILEGE_MODE = "organizational_layer"
+            else:
+                cfg.PRIVILEGE_MODE = "per_user"
+            mode_label = "POR USUARIO" if cfg.PRIVILEGE_MODE == "per_user" else "POR CAMADA ORGANIZACIONAL"
+            success(f"Modo alterado para: {mode_label}")
+
+        elif sub == "7":
+            spin("Testando conexao...", 0.6)
+            try:
+                import pyodbc
+                conn_str = build_connection_string()
+                test_conn = pyodbc.connect(conn_str, timeout=5)
+                test_conn.close()
+                ok()
+                success("Conexao estabelecida com sucesso!")
+            except Exception as e:
+                fail()
+                error(str(e))
+
+        elif sub == "8":
+            save_user_config()
+            success(f"Configuracoes salvas em config_user.json")
+
+        else:
+            print(f"\n  {C['red']}Opcao invalida!{C['reset']}\n")
+
+        if sub != "0":
+            wait_enter()
+
+
+def run_batch_organizational(choice):
+    from src.organizational_privileges import OrganizationalPrivilegeGenerator
+
+    if not EMPRESA_NAME:
+        warn("Nome da empresa nao definido. Configure em Parametrizacao -> Nome da empresa.")
+        return
+
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+    section("CONEXAO")
+    spin("Conectando ao banco MSSQL...", 0.6)
+    try:
+        with get_connection() as conn:
+            ok("Conectado com sucesso!")
+
+            section("DISCOVERY")
+            spin("Descobrindo estrutura das tabelas...", 1.0)
+            schema = discover_columns_for_tables(SCHEMA_TABLES, conn)
+            ok()
+            print_schema_summary(schema)
+
+            section("BATCH ORGANIZACIONAL")
+            mapper = UserMapper(schema, conn)
+            users = mapper.list_non_blocked_users()
+
+            if not users:
+                warn("Nenhum usuario nao bloqueado encontrado.")
+                return
+
+            total = len(users)
+            print(f"\n  {C['cyan']}{chr(0x250C)}{'─' * 45}{chr(0x2510)}{C['reset']}")
+            print(f"  {C['cyan']}{chr(0x2502)}{C['reset']} {C['bold']}Mapeando {total} usuarios...{C['reset']}")
+
+            all_reports = []
+            fail_count = 0
+
+            for i, user_info in enumerate(users, 1):
+                login = user_info["login"]
+                login_display = login if login else f"ID_{user_info['id']}"
+                print(f"\r  {C['cyan']}[{i}/{total}]{C['reset']} \033[1m{login_display}\033[0m", end="", flush=True)
+
+                try:
+                    report = mapper.build_full_report(login)
+                    if report is None:
+                        fail_count += 1
+                        continue
+
+                    report["_conn"] = conn
+                    json_path = save_report_json(report, login)
+
+                    all_reports.append(report)
+
+                except Exception as e:
+                    error(f"Erro ao mapear {login_display}: {e}")
+                    fail_count += 1
+
+            print()
+            success_count = len(all_reports)
+            print(f"  Mapeados: {C['green']}{success_count}{C['reset']} | Falhas: {C['red']}{fail_count}{C['reset']}")
+
+            if not all_reports:
+                warn("Nenhum relatorio gerado. Abortando.")
+                return
+
+            print(f"\n  {C['cyan']}{chr(0x2502)}{C['reset']} {C['bold']}Analisando camadas organizacionais...{C['reset']}")
+
+            gen = OrganizationalPrivilegeGenerator(all_reports, schema, EMPRESA_NAME, conn)
+            gen.generate_interactive()
+
+    except Exception as e:
+        fail(str(e))
+        warn("Verifique:")
+        info("  - SQL Server esta rodando?")
+        info("  - ODBC Driver 17 instalado?")
+        info("  - Credenciais corretas?")
+
+
 def main():
     report = None
     schema = None
@@ -267,24 +547,34 @@ def main():
             break
 
         elif choice in ("1", "2", "3"):
-            login_input = input(f"  {C['bold']}Usuario{C['reset']} [{C['dim']}{current_login}{C['reset']}]: ").strip()
+            if choice == "2" and PRIVILEGE_MODE == "organizational_layer":
+                run_batch_organizational(choice)
+                continue
+
+            login_input = input(f"  {C['bold']}Usuario{C['reset']} [{C['dim']}{current_login} | ENTER = TODOS{C['reset']}]: ").strip()
             if login_input:
                 current_login = login_input
 
-            if choice == "1":
-                report, schema, current_login = run_mapping(current_login)
-            elif choice == "2":
-                report, schema, current_login = run_mapping(current_login)
-                if report:
-                    run_generate_privileges(report, schema, current_login)
-            elif choice == "3":
-                report, schema, current_login = run_mapping(current_login)
-                if report:
-                    run_dashboard(current_login)
+                if choice == "1":
+                    report, schema, current_login = run_mapping(current_login)
+                elif choice == "2":
+                    report, schema, current_login = run_mapping(current_login)
+                    if report:
+                        run_generate_privileges(report, schema, current_login)
+                elif choice == "3":
+                    report, schema, current_login = run_mapping(current_login)
+                    if report:
+                        run_dashboard(current_login)
+            else:
+                run_batch(choice)
+
+        elif choice == "4":
+            menu_parametrizacao()
 
         else:
             print(f"\n  {C['red']}Opcao invalida!{C['reset']}\n")
 
 
 if __name__ == "__main__":
+    load_user_config()
     main()

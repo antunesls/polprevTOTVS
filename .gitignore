@@ -9,3 +9,4 @@ analyze_acbrowse.py
 check_disabled.py
 gen_dab_config.py
 diagnose_columns.py
+config_user.json
