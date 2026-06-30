@@ -1,4 +1,4 @@
-from src.database import get_connection, fetch_dicts
+from src.database import get_connection, fetch_dicts, fetch_all, is_offline
 
 
 def discover_columns_for_tables(tables, conn=None):
@@ -12,16 +12,26 @@ def discover_columns_for_tables(tables, conn=None):
         schema = {}
         for table in tables:
             try:
-                rows = fetch_dicts(conn, """
-                    SELECT COLUMN_NAME, DATA_TYPE, CHARACTER_MAXIMUM_LENGTH
-                    FROM INFORMATION_SCHEMA.COLUMNS
-                    WHERE TABLE_NAME = ?
-                    ORDER BY ORDINAL_POSITION
-                """, (table,))
-                if rows:
-                    schema[table] = rows
+                if is_offline():
+                    cursor = conn.cursor()
+                    cursor.execute(f"PRAGMA table_info({table})")
+                    info_rows = cursor.fetchall()
+                    if info_rows:
+                        rows = [{"COLUMN_NAME": r[1], "DATA_TYPE": r[2], "CHARACTER_MAXIMUM_LENGTH": None} for r in info_rows]
+                        schema[table] = rows
+                    else:
+                        schema[table] = None
                 else:
-                    schema[table] = None
+                    rows = fetch_dicts(conn, """
+                        SELECT COLUMN_NAME, DATA_TYPE, CHARACTER_MAXIMUM_LENGTH
+                        FROM INFORMATION_SCHEMA.COLUMNS
+                        WHERE TABLE_NAME = ?
+                        ORDER BY ORDINAL_POSITION
+                    """, (table,))
+                    if rows:
+                        schema[table] = rows
+                    else:
+                        schema[table] = None
             except Exception:
                 schema[table] = None
         return schema

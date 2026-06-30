@@ -9,7 +9,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from src.database import get_connection, build_connection_string
 from src.discovery import discover_columns_for_tables, print_schema_summary
-from src.config import SCHEMA_TABLES, OUTPUT_DIR, DB_CONFIG, PRIVILEGE_MODE, EMPRESA_NAME, load_user_config, save_user_config
+from src.config import SCHEMA_TABLES, OUTPUT_DIR, DB_CONFIG, load_user_config, save_user_config
+import src.config as cfg
 from src.user_mapper import UserMapper
 from src.privilege_generator import PrivilegeGenerator, save_report_json
 from src.dashboard import generate_html
@@ -92,9 +93,71 @@ def spin_stop(stop_event, prefix, text, ok=True):
     sys.stdout.flush()
 
 
+def run_export():
+    section("EXPORTAR DADOS")
+    spin("Conectando ao banco MSSQL...", 0.6)
+    try:
+        with get_connection() as conn:
+            ok("Conectado com sucesso!")
+
+            section("DISCOVERY")
+            spin("Descobrindo estrutura das tabelas...", 1.0)
+            schema = discover_columns_for_tables(SCHEMA_TABLES, conn)
+            ok()
+            print_schema_summary(schema)
+
+            section("GERANDO SQL")
+            from src.data_exporter import generate_export_sql
+            filepath = generate_export_sql(schema)
+            ok()
+            success(f"Script SQL salvo em: {C['bold']}{filepath}{C['reset']}")
+            print()
+            info("Instrucoes:")
+            info("  1. Abra o arquivo export.sql no SSMS")
+            info("  2. Execute contra o banco Protheus")
+            info("  3. Salve o resultado (coluna unica) como export.json")
+            info("  4. Opcao 6 no menu para importar o JSON")
+    except Exception as e:
+        fail(str(e))
+        warn("Verifique conexao e credenciais.")
+
+
+def run_import():
+    section("IMPORTAR DADOS")
+    default_path = os.path.join(OUTPUT_DIR, "export.json")
+    json_path = input(f"  Caminho do arquivo JSON [{default_path}]: ").strip()
+    if not json_path:
+        json_path = default_path
+
+    if not os.path.exists(json_path):
+        error(f"Arquivo nao encontrado: {json_path}")
+        return
+
+    from src.data_importer import import_and_set_offline
+    if import_and_set_offline(json_path):
+        info(f"Modo offline ativo. Pronto para processar.")
+        print()
+        info("Proximos passos:")
+        info("  - Opcao 1: Mapear acessos de um usuario")
+        info("  - Opcao 2: Mapear + Gerar script de privilegios")
+        info("  - Opcao 3: Mapear + Gerar dashboard HTML")
+        info("  - O processamento usara os dados importados (sem conexao ao banco)")
+    else:
+        error("Falha ao importar dados.")
+
+
+def show_offline_banner():
+    D = C["dim"]; R = C["reset"]; G = C["green"]
+    print(f"  {D}─── {G}MODO OFFLINE{D} ─── Dados carregados do export.json ───{R}")
+    print()
+
+
 def menu():
     cls()
     print(BANNER)
+    from src.database import is_offline
+    if is_offline():
+        show_offline_banner()
     L = C["cyan"]; R = C["reset"]; B = C["bold"]; D = C["dim"]; W = C["white"]; RD = C["red"]
     BOX = 52
     def row(text):
@@ -112,6 +175,13 @@ def menu():
     print(row(f"{L}║{R}    │ {D}Relatorio JSON + Dashboard grafico{R}"))
     print(row(f"{L}║{R}  {B}4{R} │ {W}Parametrizacao{R}"))
     print(row(f"{L}║{R}    │ {D}Configurar banco e preferencias{R}"))
+    print(row(f"{L}║{R}  {B}5{R} │ {W}Exportar dados (SQL){R}"))
+    print(row(f"{L}║{R}    │ {D}Gerar query para extracao offline{R}"))
+    print(row(f"{L}║{R}  {B}6{R} │ {W}Importar dados (JSON){R}"))
+    print(row(f"{L}║{R}    │ {D}Carregar export.json p/ modo offline{R}"))
+    if cfg.LLM_API_KEY and cfg.PRIVILEGE_MODE == "organizational_layer":
+        print(row(f"{L}║{R}  {B}7{R} │ {W}Pre-visualizar LLM{R}"))
+        print(row(f"{L}║{R}    │ {D}Analisar clusters antes de gerar{R}"))
     print(row(f"{L}║{R}  {B}0{R} │ {RD}Sair{R}"))
     print(f"  {L}╚{'═' * BOX}╝{R}")
     print()
@@ -342,8 +412,11 @@ def menu_parametrizacao():
         user_disp = DB_CONFIG["username"][:28]
         pass_disp = "****"
         driver_disp = DB_CONFIG["driver"][:28]
-        mode_disp = "POR USUARIO" if PRIVILEGE_MODE == "per_user" else "POR CAMADA ORGANIZACIONAL"
-        empresa_disp = EMPRESA_NAME[:28] if EMPRESA_NAME else "(nao definido)"
+        mode_disp = "POR USUARIO" if cfg.PRIVILEGE_MODE == "per_user" else "POR CAMADA ORGANIZACIONAL"
+        empresa_disp = cfg.EMPRESA_NAME[:28] if cfg.EMPRESA_NAME else "(nao definido)"
+        llm_key_disp = "****" if cfg.LLM_API_KEY else "(nao definido)"
+        llm_model_disp = cfg.LLM_MODEL[:28] if cfg.LLM_MODEL else "(nao definido)"
+        llm_url_disp = cfg.LLM_BASE_URL[:28] if cfg.LLM_BASE_URL else "(nao definido)"
 
         print(f"  {L}╔{'═' * BOX}╗{R}")
         print(row(f"{L}║{R}  {B}PARAMETRIZACAO{R}"))
@@ -353,9 +426,13 @@ def menu_parametrizacao():
         print(row(f"{L}║{R}  {B}3{R} │ {W}Usuario ...........{R} [{D}{user_disp}{R}]"))
         print(row(f"{L}║{R}  {B}4{R} │ {W}Senha .............{R} [{D}{pass_disp}{R}]"))
         print(row(f"{L}║{R}  {B}5{R} │ {W}Driver ODBC .......{R} [{D}{driver_disp}{R}]"))
-        if PRIVILEGE_MODE == "organizational_layer":
+        if cfg.PRIVILEGE_MODE == "organizational_layer":
             print(row(f"{L}║{R}  {D}{'─' * (BOX - 3)}{R}"))
             print(row(f"{L}║{R}  {B}5{N}{R} │ {W}Nome da empresa ...{R} [{D}{empresa_disp}{R}]"))
+            print(row(f"{L}║{R}  {D}{'─' * (BOX - 3)}{R}"))
+            print(row(f"{L}║{R}  {B}5{A}{R} │ {W}LLM API Key .......{R} [{D}{llm_key_disp}{R}]"))
+            print(row(f"{L}║{R}  {B}5{B}{R} │ {W}LLM Model .........{R} [{D}{llm_model_disp}{R}]"))
+            print(row(f"{L}║{R}  {B}5{C}{R} │ {W}LLM Base URL ......{R} [{D}{llm_url_disp}{R}]"))
         print(row(f"{L}║{R}  {D}{'─' * (BOX - 3)}{R}"))
         print(row(f"{L}║{R}  {B}6{R} │ {W}Modo de privilegio{R} [{G}{mode_disp}{R}]"))
         print(row(f"{L}║{R}  {D}{'─' * (BOX - 3)}{R}"))
@@ -406,14 +483,30 @@ def menu_parametrizacao():
                 success(f"Driver alterado para: {val}")
 
         elif sub == "5N":
-            val = input(f"  Nome da empresa [{EMPRESA_NAME}]: ").strip()
+            val = input(f"  Nome da empresa [{cfg.EMPRESA_NAME}]: ").strip()
             if val:
-                import src.config as cfg
                 cfg.EMPRESA_NAME = val
                 success(f"Empresa alterada para: {val}")
 
+        elif sub == "5A":
+            val = input(f"  LLM API Key [{cfg.LLM_API_KEY[:8] + '...' if cfg.LLM_API_KEY else '(vazio)'}]: ").strip()
+            if val:
+                cfg.LLM_API_KEY = val
+                success("LLM API Key alterada.")
+
+        elif sub == "5B":
+            val = input(f"  LLM Model [{cfg.LLM_MODEL}]: ").strip()
+            if val:
+                cfg.LLM_MODEL = val
+                success(f"LLM Model alterado para: {val}")
+
+        elif sub == "5C":
+            val = input(f"  LLM Base URL [{cfg.LLM_BASE_URL}]: ").strip()
+            if val:
+                cfg.LLM_BASE_URL = val
+                success(f"LLM Base URL alterada para: {val}")
+
         elif sub == "6":
-            import src.config as cfg
             if cfg.PRIVILEGE_MODE == "per_user":
                 cfg.PRIVILEGE_MODE = "organizational_layer"
             else:
@@ -445,12 +538,156 @@ def menu_parametrizacao():
             wait_enter()
 
 
+_saved_llm_clusters = None
+
+
+def run_llm_preview():
+    global _saved_llm_clusters
+
+    if not cfg.LLM_API_KEY:
+        warn("LLM API Key nao configurada. Configure em Parametrizacao.")
+        return
+
+    if not cfg.EMPRESA_NAME:
+        warn("Nome da empresa nao definido. Configure em Parametrizacao.")
+        return
+
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+    section("CONEXAO")
+    spin("Conectando ao banco MSSQL...", 0.6)
+    try:
+        with get_connection() as conn:
+            ok("Conectado com sucesso!")
+
+            section("DISCOVERY")
+            spin("Descobrindo estrutura das tabelas...", 1.0)
+            schema = discover_columns_for_tables(SCHEMA_TABLES, conn)
+            ok()
+            print_schema_summary(schema)
+
+            section("MAPEANDO USUARIOS")
+            mapper = UserMapper(schema, conn)
+            users = mapper.list_non_blocked_users()
+
+            if not users:
+                warn("Nenhum usuario nao bloqueado encontrado.")
+                return
+
+            total = len(users)
+            all_reports = []
+            fail_count = 0
+
+            for i, user_info in enumerate(users, 1):
+                login = user_info["login"]
+                login_display = login if login else f"ID_{user_info['id']}"
+                print(f"\r  {C['cyan']}[{i}/{total}]{C['reset']} \033[1m{login_display}\033[0m", end="", flush=True)
+
+                try:
+                    report = mapper.build_full_report(login)
+                    if report is None:
+                        fail_count += 1
+                        continue
+                    report["_conn"] = conn
+                    json_path = save_report_json(report, login)
+                    all_reports.append(report)
+                except Exception as e:
+                    error(f"Erro ao mapear {login_display}: {e}")
+                    fail_count += 1
+
+            print()
+            success_count = len(all_reports)
+            print(f"  Mapeados: {C['green']}{success_count}{C['reset']} | Falhas: {C['red']}{fail_count}{C['reset']}")
+
+            if not all_reports:
+                warn("Nenhum relatorio gerado. Abortando.")
+                return
+
+            from src.llm_categorizer import suggest_clusters, build_prompt
+
+            users_data = []
+            for rep in all_reports:
+                routines = []
+                for r in rep.get("routines_summary", []):
+                    code = r.get("routine", "")
+                    desc = r.get("description", "")
+                    if code:
+                        routines.append(f"{code} - {desc}" if desc else code)
+                users_data.append({
+                    "user": rep["user"],
+                    "department": rep.get("user_depto", ""),
+                    "routines": routines,
+                })
+
+            print(f"\n  {C['cyan']}[LLM]{C['reset']} Enviando {len(users_data)} usuarios para analise...")
+            llm_result = suggest_clusters(users_data)
+
+            if not llm_result or not llm_result.get("clusters"):
+                warn("LLM nao retornou clusters validos. Use opcao 2 para modo manual (Jaccard).")
+                return
+
+            llm_clusters = llm_result.get("clusters", [])
+
+            G = C["green"]; CY = C["cyan"]; Y = C["yellow"]; R = C["reset"]; D = C["dim"]; B = C["bold"]
+            print()
+            for idx, c in enumerate(llm_clusters, 1):
+                name = c.get("name", f"CLUSTER_{idx}")
+                reason = c.get("reason", "")
+                users_list = c.get("users", [])
+                routines_list = c.get("common_routines", [])
+
+                print(f"  {CY}{chr(0x250C)}{'─' * 52}{chr(0x2510)}{R}")
+                print(f"  {CY}{chr(0x2502)}{R} {B}Cluster #{idx}: {G}{name}{R}")
+                if reason:
+                    print(f"  {CY}{chr(0x2502)}{R} {D}Motivo: {reason}{R}")
+                print(f"  {CY}{chr(0x2502)}{R} Usuarios ({len(users_list)}): {', '.join(users_list[:6])}{'...' if len(users_list) > 6 else ''}")
+                print(f"  {CY}{chr(0x2502)}{R} Rotinas comuns: {len(routines_list)}")
+                sample = routines_list[:6]
+                print(f"  {CY}{chr(0x2502)}{R}   Ex: {', '.join(sample)}{'...' if len(routines_list) > 6 else ''}")
+                print(f"  {CY}{chr(0x2514)}{'─' * 52}{chr(0x2518)}{R}")
+
+            print()
+            print(f"  {B}[G]{R} Gerar SQL completo (4 tiers) com estes clusters")
+            print(f"  {B}[E]{R} Editar nomes antes de gerar")
+            print(f"  {B}[V]{R} Voltar (nao gerar nada)")
+            action = input(f"  Opcao: ").strip().upper()
+
+            if action == "V":
+                info("Clusters descartados.")
+                return
+
+            if action == "E":
+                print(f"\n  {B}Edicao de nomes:{R}")
+                for idx, c in enumerate(llm_clusters):
+                    name = c.get("name", f"CLUSTER_{idx}")
+                    users_list = c.get("users", [])
+                    val = input(f"  Cluster #{idx} ({', '.join(users_list[:3])}...) [{name}]: ").strip()
+                    if val:
+                        c["name"] = val.upper()
+
+            _saved_llm_clusters = llm_clusters
+            info(f"Clusters salvos ({len(llm_clusters)}). Use opcao 2 para gerar o SQL.")
+
+    except Exception as e:
+        fail(str(e))
+
+
 def run_batch_organizational(choice):
+    global _saved_llm_clusters
     from src.organizational_privileges import OrganizationalPrivilegeGenerator
 
-    if not EMPRESA_NAME:
+    if not cfg.EMPRESA_NAME:
         warn("Nome da empresa nao definido. Configure em Parametrizacao -> Nome da empresa.")
         return
+
+    if cfg.LLM_API_KEY and _saved_llm_clusters is None:
+        info(f"LLM configurada mas nenhum cluster pre-definido.")
+        info(f"Use opcao {C['bold']}7{C['reset']} primeiro para pre-visualizar a analise da LLM.")
+        info(f"Ou continue para usar o modo manual (Jaccard).")
+        print()
+        cont = input(f"  Continuar com modo manual? (S/n): ").strip().upper()
+        if cont == "N":
+            return
 
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
@@ -511,8 +748,9 @@ def run_batch_organizational(choice):
 
             print(f"\n  {C['cyan']}{chr(0x2502)}{C['reset']} {C['bold']}Analisando camadas organizacionais...{C['reset']}")
 
-            gen = OrganizationalPrivilegeGenerator(all_reports, schema, EMPRESA_NAME, conn)
-            gen.generate_interactive()
+            gen = OrganizationalPrivilegeGenerator(all_reports, schema, cfg.EMPRESA_NAME, conn)
+            gen.generate_interactive(llm_clusters=_saved_llm_clusters)
+            _saved_llm_clusters = None
 
     except Exception as e:
         fail(str(e))
@@ -547,7 +785,7 @@ def main():
             break
 
         elif choice in ("1", "2", "3"):
-            if choice == "2" and PRIVILEGE_MODE == "organizational_layer":
+            if choice == "2" and cfg.PRIVILEGE_MODE == "organizational_layer":
                 run_batch_organizational(choice)
                 continue
 
@@ -570,6 +808,15 @@ def main():
 
         elif choice == "4":
             menu_parametrizacao()
+
+        elif choice == "5":
+            run_export()
+
+        elif choice == "6":
+            run_import()
+
+        elif choice == "7":
+            run_llm_preview()
 
         else:
             print(f"\n  {C['red']}Opcao invalida!{C['reset']}\n")

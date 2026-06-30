@@ -112,12 +112,12 @@ class PrivilegeGenerator:
                     insert_vals.append(self._sanitize(access_value))
                 if fet_menuoper and menu_oper is not None:
                     insert_cols.append(fet_menuoper)
-                    insert_vals.append(str(int(menu_oper)))
+                    insert_vals.append(str(int(float(menu_oper))))
                 if fet_menudef and menu_def:
                     insert_cols.append(fet_menudef)
                     insert_vals.append(self._sanitize(menu_def))
 
-                comment = f"-- {func} | {feat_name} | OP={int(menu_oper) if menu_oper is not None else '?'} | {feat_info.get('access', '?')}"
+                comment = f"-- {func} | {feat_name} | OP={int(float(menu_oper)) if menu_oper is not None else '?'} | {feat_info.get('access', '?')}"
                 lines.append(comment)
                 lines.append(f"INSERT INTO SYS_RULES_FEATURES ({', '.join(insert_cols)})")
                 lines.append(f"VALUES ({', '.join(insert_vals)});")

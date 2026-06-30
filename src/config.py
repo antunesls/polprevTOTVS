@@ -13,6 +13,12 @@ PRIVILEGE_MODE = "per_user"
 
 EMPRESA_NAME = ""
 
+LLM_API_KEY = ""
+LLM_BASE_URL = "https://openrouter.ai/api/v1"
+LLM_MODEL = "openai/gpt-4o-mini"
+
+DATA_MODE = "live"
+
 OUTPUT_DIR = "output"
 
 CONFIG_USER_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config_user.json")
@@ -44,6 +50,9 @@ def load_user_config():
         DB_CONFIG.update(user_cfg.get("db", {}))
         globals()["PRIVILEGE_MODE"] = user_cfg.get("privilege_mode", "per_user")
         globals()["EMPRESA_NAME"] = user_cfg.get("empresa_name", "")
+        globals()["LLM_API_KEY"] = user_cfg.get("llm_api_key", "")
+        globals()["LLM_BASE_URL"] = user_cfg.get("llm_base_url", "https://openrouter.ai/api/v1")
+        globals()["LLM_MODEL"] = user_cfg.get("llm_model", "openai/gpt-4o-mini")
     except Exception:
         pass
 
@@ -53,6 +62,9 @@ def save_user_config():
         "db": {k: DB_CONFIG[k] for k in ("server", "database", "username", "password", "driver")},
         "privilege_mode": PRIVILEGE_MODE,
         "empresa_name": EMPRESA_NAME,
+        "llm_api_key": LLM_API_KEY,
+        "llm_base_url": LLM_BASE_URL,
+        "llm_model": LLM_MODEL,
     }
     with open(CONFIG_USER_PATH, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)

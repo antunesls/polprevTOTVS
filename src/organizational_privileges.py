@@ -69,7 +69,7 @@ class OrganizationalPrivilegeGenerator:
                 return r.get("features", {})
         return {}
 
-    def generate_interactive(self):
+    def generate_interactive(self, llm_clusters=None):
         G = C["green"]; CY = C["cyan"]; Y = C["yellow"]; B = C["bold"]; R = C["reset"]; D = C["dim"]; W = C["white"]
 
         print(f"\n  {CY}{B}[TIER 1]{R} Privilegio geral da empresa ({self.empresa_name})")
@@ -79,7 +79,7 @@ class OrganizationalPrivilegeGenerator:
         self._compute_tier2()
 
         print(f"\n  {CY}{B}[TIER 3]{R} Conjuntos cross-departamento (clustering)")
-        self._compute_tier3_interactive()
+        self._compute_tier3_interactive(llm_clusters=llm_clusters)
 
         print(f"\n  {CY}{B}[TIER 4]{R} Privilegios exclusivos por usuario")
         self._compute_tier4()
@@ -135,7 +135,143 @@ class OrganizationalPrivilegeGenerator:
             else:
                 print(f"  {Y}{dept}{R}: {len(reps)} usuarios, {D}sem rotinas comuns{R}")
 
-    def _compute_tier3_interactive(self):
+    def _compute_tier3_interactive(self, llm_clusters=None):
+        G = C["green"]; CY = C["cyan"]; Y = C["yellow"]; R = C["reset"]; D = C["dim"]; B = C["bold"]; W = C["white"]
+
+        if llm_clusters is not None:
+            print(f"  {G}Usando {len(llm_clusters)} clusters pre-definidos.{R}")
+            self._review_llm_clusters(llm_clusters, auto_accept=True)
+            return
+
+        llm_result = self._try_llm_clustering()
+        if llm_result:
+            self._review_llm_clusters(llm_result, auto_accept=False)
+            return
+
+        self._jaccard_clustering()
+
+    def _try_llm_clustering(self):
+        from src.config import LLM_API_KEY
+        if not LLM_API_KEY:
+            return None
+
+        G = C["green"]; CY = C["cyan"]; Y = C["yellow"]; R = C["reset"]; D = C["dim"]
+
+        users_data = []
+        for rep in self.reports:
+            routines = []
+            for r in rep.get("routines_summary", []):
+                code = r.get("routine", "")
+                desc = r.get("description", "")
+                if code:
+                    routines.append(f"{code} - {desc}" if desc else code)
+            users_data.append({
+                "user": rep["user"],
+                "department": rep.get("user_depto", ""),
+                "routines": routines,
+            })
+
+        from src.llm_categorizer import suggest_clusters
+        llm_result = suggest_clusters(users_data)
+
+        if not llm_result or not llm_result.get("clusters"):
+            return None
+
+        clusters = llm_result.get("clusters", [])
+        all_users_set = set(rep["user"] for rep in self.reports)
+        clustered_users = set()
+        for c in clusters:
+            clustered_users |= set(c.get("users", []))
+
+        unclustered = llm_result.get("unclustered", [])
+        unclustered_set = set(unclustered) | (all_users_set - clustered_users)
+
+        if unclustered_set:
+            print(f"  {D}Usuarios nao agrupados: {', '.join(sorted(unclustered_set)[:10])}{R}")
+
+        return clusters
+
+    def _review_llm_clusters(self, llm_clusters, auto_accept=False):
+        G = C["green"]; CY = C["cyan"]; Y = C["yellow"]; R = C["reset"]; D = C["dim"]; B = C["bold"]
+
+        print()
+        for idx, c in enumerate(llm_clusters, 1):
+            name = c.get("name", f"CLUSTER_{idx}")
+            reason = c.get("reason", "")
+            users = c.get("users", [])
+            routines = c.get("common_routines", [])
+
+            print(f"  {CY}{chr(0x250C)}{'─' * 52}{chr(0x2510)}{R}")
+            print(f"  {CY}{chr(0x2502)}{R} {B}Cluster #{idx}: {G}{name}{R}")
+            if reason:
+                print(f"  {CY}{chr(0x2502)}{R} {D}Motivo: {reason}{R}")
+            print(f"  {CY}{chr(0x2502)}{R} Usuarios ({len(users)}): {', '.join(users[:8])}{'...' if len(users) > 8 else ''}")
+            print(f"  {CY}{chr(0x2502)}{R} Rotinas comuns: {len(routines)}")
+            sample = routines[:6]
+            print(f"  {CY}{chr(0x2502)}{R}   Ex: {', '.join(sample)}{'...' if len(routines) > 6 else ''}")
+            print(f"  {CY}{chr(0x2514)}{'─' * 52}{chr(0x2518)}{R}")
+
+        print()
+        if not auto_accept:
+            print(f"  {B}[A]{R} Aceitar todos  {D}[E]{R} Editar nomes  {D}[M]{R} Modo manual (Jaccard)  {D}[X]{R} Cancelar")
+            action = input(f"  Opcao: ").strip().upper()
+
+            if action == "X":
+                print(f"  {Y}Cancelado. Conjuntos nao foram criados.{R}")
+                return
+
+            if action == "M":
+                print(f"  {Y}Alternando para modo manual (Jaccard)...{R}")
+                self._jaccard_clustering()
+                return
+
+            if action == "E":
+                llm_clusters = self._edit_llm_clusters(llm_clusters)
+                if not llm_clusters:
+                    return
+
+        for c in llm_clusters:
+            name = (c.get("name") or f"CLUSTER_{idx}").strip().upper()
+            if not name.startswith("P_CJ_"):
+                name = f"P_CJ_{name}"
+            if len(name) > 20:
+                name = name[:20]
+
+            user_routine_set = self._user_routine_set
+            routines_set = set()
+            for u in c.get("users", []):
+                for rep in self.reports:
+                    if rep["user"] == u:
+                        routines_set |= user_routine_set(rep)
+                        break
+
+            self.tier3_routines[name] = {
+                "routines": set(c.get("common_routines", [])),
+                "members": c.get("users", []),
+            }
+            print(f"  {G}Criado: {name}{R}")
+
+    def _edit_llm_clusters(self, llm_clusters):
+        G = C["green"]; Y = C["yellow"]; R = C["reset"]; D = C["dim"]; B = C["bold"]
+
+        print(f"\n  {B}Edicao de nomes dos clusters:{R}")
+        print(f"  {D}Digite o novo nome ou ENTER para manter / 'p' para pular{R}")
+        print()
+
+        result = []
+        for idx, c in enumerate(llm_clusters, 1):
+            name = c.get("name", f"CLUSTER_{idx}")
+            users = c.get("users", [])
+            val = input(f"  Cluster #{idx} ({', '.join(users[:3])}...) [{name}]: ").strip()
+            if val.lower() == "p":
+                continue
+            if val:
+                c["name"] = val.upper()
+            result.append(c)
+
+        return result
+
+    def _jaccard_clustering(self):
         G = C["green"]; CY = C["cyan"]; Y = C["yellow"]; R = C["reset"]; D = C["dim"]; B = C["bold"]; W = C["white"]
 
         user_routines = {}
@@ -464,7 +600,7 @@ class OrganizationalPrivilegeGenerator:
                 insert_vals.append(self._sanitize(access_value))
             if fet_menuoper and menu_oper is not None:
                 insert_cols.append(fet_menuoper)
-                insert_vals.append(str(int(menu_oper)))
+                insert_vals.append(str(int(float(menu_oper))))
             if fet_menudef and menu_def:
                 insert_cols.append(fet_menudef)
                 insert_vals.append(self._sanitize(menu_def))

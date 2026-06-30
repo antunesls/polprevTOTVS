@@ -2,6 +2,20 @@ import pyodbc
 from contextlib import contextmanager
 from src.config import DB_CONFIG
 
+_offline_conn = None
+
+
+def set_offline_connection(conn):
+    global _offline_conn
+    _offline_conn = conn
+    import src.config as cfg
+    cfg.DATA_MODE = "offline"
+
+
+def is_offline():
+    import src.config as cfg
+    return cfg.DATA_MODE == "offline" and _offline_conn is not None
+
 
 def build_connection_string():
     return (
@@ -15,6 +29,10 @@ def build_connection_string():
 
 @contextmanager
 def get_connection():
+    if is_offline():
+        yield _offline_conn
+        return
+
     conn_str = build_connection_string()
     conn = pyodbc.connect(conn_str)
     try:

@@ -96,7 +96,7 @@ class UserMapper:
 
     def map_menu_modules(self, user_id):
         usr_col = self.resolve_col("SYS_USR_MODULE", ["USR_ID", "UMD_USR_ID", "USM_USR_ID"])
-        menu_col = self.resolve_col("SYS_USR_MODULE", ["USR_MODULO", "USR_CODMOD", "UMD_MENU_ID", "MENU_ID", "USM_MENU_ID"])
+        menu_col = self.resolve_col("SYS_USR_MODULE", ["USR_ARQMENU", "USR_MODULO", "USR_CODMOD", "UMD_MENU_ID", "MENU_ID", "USM_MENU_ID"])
         access_col = self.resolve_col("SYS_USR_MODULE", ["USR_ACESSO", "ACESSO"])
         del_col = self.resolve_col("SYS_USR_MODULE", ["D_E_L_E_T_"])
 
@@ -147,6 +147,9 @@ class UserMapper:
         if m_del:
             where += f" AND {m_del} = ?"
             params.append(" ")
+        if m_name:
+            where += f" AND {m_name} NOT LIKE ?"
+            params.append("#%")
 
         menus = fetch_dicts(self.conn,
             f"SELECT {', '.join(base_cols)} FROM MPMENU_MENU WHERE {where}",
@@ -301,7 +304,7 @@ class UserMapper:
         if not group_ids:
             return {}
 
-        grp_ids = [g["group_id"] for g in group_ids]
+        grp_ids = list(group_ids)
 
         gr_col = self.resolve_col("SYS_RULES_GRP_RULES", ["GROUP_ID", "GRR_GRP_ID", "GRP_ID", "RGR_GRP_ID"])
         rul_col = self.resolve_col("SYS_RULES_GRP_RULES", ["GR__RL_ID", "GRR_RUL_ID", "RUL_ID", "RGR_RUL_ID"])
@@ -459,7 +462,7 @@ class UserMapper:
         overrides = {}
         for row in rows:
             prog = (row.get("P_PROG") or "").strip()
-            data = bytes(row.get("P_DEFS") or b"")
+            data = self._to_bytes(row.get("P_DEFS"))
             if not data or len(data) < 6:
                 continue
             entries = self._parse_acbrowse(data)
@@ -468,6 +471,21 @@ class UserMapper:
             overrides[prog].update(entries)
 
         return overrides
+
+    def _to_bytes(self, value):
+        if value is None:
+            return b""
+        if isinstance(value, bytes):
+            return value
+        if isinstance(value, str):
+            if not value.strip():
+                return b""
+            import base64
+            try:
+                return base64.b64decode(value)
+            except Exception:
+                return value.encode("latin-1")
+        return bytes(value)
 
     def _parse_acbrowse(self, data):
         entries = {}
@@ -621,13 +639,15 @@ class UserMapper:
                         op_features = []
                         for fname, finfo in priv_for_func.items():
                             fmo = finfo.get("menu_oper")
-                            if fmo is not None and abs(fmo - menu_oper) < 0.001:
-                                op_features.append({
-                                    "name": fname.strip() if fname else "",
-                                    "action": (finfo.get("menu_def") or "").strip(),
-                                    "granted": translate_access(finfo["access"]),
-                                    "access_raw": finfo["access"],
-                                })
+                            if fmo is not None:
+                                fmo = float(fmo)
+                                if abs(fmo - menu_oper) < 0.001:
+                                    op_features.append({
+                                        "name": fname.strip() if fname else "",
+                                        "action": (finfo.get("menu_def") or "").strip(),
+                                        "granted": translate_access(finfo["access"]),
+                                        "access_raw": finfo["access"],
+                                    })
                         browse_permissions.append({
                             "pos": pos,
                             "menu_oper": int(menu_oper),
