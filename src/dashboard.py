@@ -90,6 +90,7 @@ def generate_html(report_path):
     pr_no = total_routines - pr_yes
 
     acbrowse_disabled_count = sum(1 for r in routines if r.get("disabled_by_acbrowse", False))
+    saldo = total_routines - acbrowse_disabled_count
 
     tree_roots = []
     for menu in menus:
@@ -220,7 +221,7 @@ tr:hover {{ background:#1c2129; }}
 <div class="kpi-grid">
   <div class="kpi-card c1"><div class="kpi-value">{total_menus}</div><div class="kpi-label">Menus Acessiveis</div></div>
   <div class="kpi-card c2"><div class="kpi-value">{total_routines}</div><div class="kpi-label">Rotinas Mapeadas</div></div>
-  <div class="kpi-card c3"><div class="kpi-value">{items_with_func}</div><div class="kpi-label">Com Function Code</div></div>
+  <div class="kpi-card c3"><div class="kpi-value">{saldo}</div><div class="kpi-label">Saldo Acessivel</div></div>
   <div class="kpi-card c4"><div class="kpi-value">{groups_count}</div><div class="kpi-label">Grupos</div></div>
   <div class="kpi-card c5"><div class="kpi-value">{acbrowse_disabled_count}</div><div class="kpi-label">Bloqueadas (Perfil)</div></div>
 </div>
@@ -231,7 +232,7 @@ tr:hover {{ background:#1c2129; }}
     <canvas id="barChart"></canvas>
   </div>
   <div class="chart-box">
-    <h3>Funcoes vs Sem Funcao</h3>
+    <h3>Acessiveis vs Bloqueadas</h3>
     <canvas id="pieChart"></canvas>
   </div>
 </div>
@@ -294,10 +295,10 @@ new Chart(document.getElementById('barChart'), {{
 new Chart(document.getElementById('pieChart'), {{
   type: 'doughnut',
   data: {{
-    labels: ['Com Function Code', 'Sem Function Code'],
+    labels: ['Acessiveis', 'Bloqueadas (Perfil)'],
     datasets: [{{
-      data: [{items_with_func}, {items_no_func}],
-      backgroundColor: ['#3fb950', '#30363d'],
+      data: [{saldo}, {acbrowse_disabled_count}],
+      backgroundColor: ['#3fb950', '#f78166'],
       borderColor: '#161b22',
       borderWidth: 3,
     }}]
