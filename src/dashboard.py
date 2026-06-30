@@ -221,7 +221,7 @@ tr:hover {{ background:#1c2129; }}
 <div class="kpi-grid">
   <div class="kpi-card c1"><div class="kpi-value">{total_menus}</div><div class="kpi-label">Menus Acessiveis</div></div>
   <div class="kpi-card c2"><div class="kpi-value">{total_routines}</div><div class="kpi-label">Rotinas Mapeadas</div></div>
-  <div class="kpi-card c3"><div class="kpi-value">{saldo}</div><div class="kpi-label">Saldo Acessivel</div></div>
+  <div class="kpi-card c3"><div class="kpi-value">{saldo}</div><div class="kpi-label">Rotinas Permitidas</div></div>
   <div class="kpi-card c4"><div class="kpi-value">{groups_count}</div><div class="kpi-label">Grupos</div></div>
   <div class="kpi-card c5"><div class="kpi-value">{acbrowse_disabled_count}</div><div class="kpi-label">Bloqueadas (Perfil)</div></div>
 </div>
