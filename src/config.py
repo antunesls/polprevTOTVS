@@ -20,7 +20,6 @@ LLM_MODEL = "openai/gpt-4o-mini"
 API_CONFIG = {
     "enabled": False,
     "base_url": "https://localhost:1234/app-root",
-    "auth_url": "",
     "api_username": "",
     "api_password": "",
     "bearer_token": "",
@@ -45,6 +44,7 @@ SCHEMA_TABLES = [
     "SYS_GRP_GROUP",
     "SYS_RULES",
     "SYS_RULES_FEATURES",
+    "SYS_RULES_TRANSACT",
     "SYS_RULES_BUTTONS",
     "SYS_RULES_GRP_RULES",
     "SYS_RULES_USR_RULES",
@@ -85,7 +85,6 @@ def save_user_config():
         "api": {
             "enabled": API_CONFIG["enabled"],
             "base_url": API_CONFIG["base_url"],
-            "auth_url": API_CONFIG["auth_url"],
             "api_username": API_CONFIG["api_username"],
             "api_password": API_CONFIG["api_password"],
             "bearer_token": API_CONFIG["bearer_token"],

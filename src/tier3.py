@@ -1,3 +1,10 @@
+import re
+import unicodedata
+
+
+DEPARTMENT_LLM_CONFIDENCE_THRESHOLD = 0.95
+
+
 def routine_code(value):
     if value is None:
         return ""
@@ -108,6 +115,7 @@ def _routine_details_map(reports):
 
 
 def build_department_analysis(reports, existing_rules=None):
+    reports = apply_department_canonicalization(reports)
     by_dept = {}
     for report in reports or []:
         dept = report.get("user_depto", "").strip() or "SEM_DEPARTAMENTO"
@@ -201,6 +209,83 @@ def _normalize_name(name):
 
 def _normalized_label(value):
     return str(value or "").strip().upper().replace(" ", "_")
+
+
+def normalize_department_name(value):
+    raw = str(value or "").strip()
+    if not raw:
+        return "SEM_DEPARTAMENTO"
+    ascii_value = unicodedata.normalize("NFKD", raw)
+    ascii_value = "".join(ch for ch in ascii_value if not unicodedata.combining(ch))
+    ascii_value = re.sub(r"[\/_-]+", " ", ascii_value.upper())
+    ascii_value = re.sub(r"\s+", " ", ascii_value).strip()
+    return ascii_value or "SEM_DEPARTAMENTO"
+
+
+def _validated_department_aliases(llm_result, confidence_threshold):
+    alias_map = {}
+    if not isinstance(llm_result, dict):
+        return alias_map
+
+    for group in llm_result.get("groups", []) or []:
+        canonical = normalize_department_name(group.get("canonical"))
+        confidence = group.get("confidence", 0)
+        try:
+            confidence = float(confidence)
+        except (TypeError, ValueError):
+            confidence = 0
+        if confidence < confidence_threshold or canonical == "SEM_DEPARTAMENTO":
+            continue
+
+        aliases = {normalize_department_name(alias) for alias in group.get("aliases", []) or []}
+        aliases.add(canonical)
+        aliases.discard("SEM_DEPARTAMENTO")
+        for alias in aliases:
+            alias_map[alias] = canonical
+
+    return alias_map
+
+
+def apply_department_canonicalization(reports, llm_result=None, confidence_threshold=DEPARTMENT_LLM_CONFIDENCE_THRESHOLD):
+    prepared = []
+    unique_departments = set()
+    already_prepared = True
+    for report in reports or []:
+        item = dict(report)
+        has_prepared_department = "user_depto_normalized" in report
+        if not has_prepared_department:
+            already_prepared = False
+        original = item.get("user_depto_original", item.get("user_depto", ""))
+        normalized = normalize_department_name(original)
+        current_department = normalize_department_name(item.get("user_depto", ""))
+        item["user_depto_original"] = original
+        item["user_depto_normalized"] = normalized
+        item["user_depto"] = current_department if has_prepared_department else normalized
+        item["department_merge_source"] = item.get("department_merge_source", "deterministic") if has_prepared_department else "deterministic"
+        prepared.append(item)
+        unique_departments.add(item["user_depto"])
+
+    if llm_result is None and not already_prepared and len(unique_departments) > 1:
+        try:
+            from src.config import LLM_API_KEY
+            if LLM_API_KEY:
+                from src.llm_categorizer import suggest_department_aliases
+                llm_result = suggest_department_aliases(sorted(unique_departments))
+        except Exception:
+            llm_result = None
+
+    alias_map = _validated_department_aliases(llm_result, confidence_threshold)
+    if not alias_map:
+        return prepared
+
+    for item in prepared:
+        normalized = item["user_depto_normalized"]
+        canonical = alias_map.get(normalized, normalized)
+        item["user_depto"] = canonical
+        if canonical != normalized:
+            item["department_merge_source"] = "llm"
+
+    return prepared
 
 
 def _department_labels(reports):

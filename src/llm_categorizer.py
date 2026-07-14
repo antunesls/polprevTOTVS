@@ -111,6 +111,38 @@ IMPORTANTE: Responda EXCLUSIVAMENTE com JSON puro, sem markdown:
 }}"""
 
 
+def build_department_prompt(department_names):
+    entries = "\n".join(f"- {name}" for name in department_names if str(name).strip())
+    return f"""Voce e um analista de dados organizacionais.
+
+Sua tarefa: identificar nomes de departamentos que representam o MESMO departamento, mas foram digitados com pequenas variacoes.
+
+REGRAS:
+1. Una apenas departamentos com alta confianca de equivalencia.
+2. Considere variacoes de acento, espacos, siglas e nome extenso quando forem claramente o mesmo departamento.
+3. NAO una departamentos apenas por semelhanca superficial.
+4. Se houver duvida, nao una.
+5. Use confianca de 0 a 1.
+6. Responda apenas grupos com confianca alta o suficiente para automacao.
+7. O campo aliases deve listar nomes exatamente como vieram da lista.
+
+Departamentos:
+{entries}
+
+Responda EXCLUSIVAMENTE com JSON puro, sem markdown:
+
+{{
+  "groups": [
+    {{
+      "canonical": "RECURSOS HUMANOS",
+      "aliases": ["RH", "RECURSOS HUMANOS"],
+      "confidence": 0.95,
+      "reason": "Sigla e nome extenso do mesmo departamento"
+    }}
+  ]
+}}"""
+
+
 def call_openrouter(prompt):
     if not llm_cfg.LLM_API_KEY or not llm_cfg.LLM_BASE_URL:
         return None
@@ -370,28 +402,75 @@ def suggest_clusters(users_data):
     }
 
 
+def suggest_department_aliases(department_names):
+    if not llm_cfg.LLM_API_KEY:
+        return None
+
+    names = []
+    seen = set()
+    for name in department_names or []:
+        value = str(name or "").strip()
+        if value and value not in seen:
+            names.append(value)
+            seen.add(value)
+
+    if len(names) < 2:
+        return {"groups": []}
+
+    print(f"\n  {C['cyan']}Consultando LLM para equivalencia de departamentos ({llm_cfg.LLM_MODEL})...{C['reset']}")
+    response_text = call_openrouter(build_department_prompt(names))
+    if not response_text:
+        return None
+
+    result = extract_json(response_text)
+    if not isinstance(result, dict):
+        print(f"  {C['yellow']}LLM retornou equivalencias de departamentos em formato invalido.{C['reset']}")
+        return None
+
+    groups = []
+    valid_names = set(names)
+    for group in result.get("groups", []) or []:
+        canonical = str(group.get("canonical") or "").strip()
+        aliases = []
+        for alias in group.get("aliases", []) or []:
+            alias_value = str(alias or "").strip()
+            if alias_value and alias_value in valid_names and alias_value not in aliases:
+                aliases.append(alias_value)
+        if canonical and aliases:
+            groups.append({
+                "canonical": canonical,
+                "aliases": aliases,
+                "confidence": group.get("confidence", 0),
+                "reason": group.get("reason", ""),
+            })
+
+    return {"groups": groups}
+
+
 def _fallback_regex_extract(text, users_data):
     user_set = {u["user"] for u in users_data}
     result = {"clusters": [], "unclustered": []}
 
     patterns = [
-        r'"name"\s*:\s*"([^"]+)".*?"users"\s*:\s*\[([^\]]+)\]',
-        r'"name"\s*:\s*"([^"]+)"[^}]*?"users"\s*:\s*\[([^\]]+)\]',
+        r'\{[^{}]*?"name"\s*:\s*"([^"]+)".*?"routines"\s*:\s*\[(.*?)\].*?"users"\s*:\s*\[(.*?)\].*?\}',
+        r'"name"\s*:\s*"([^"]+)".*?"routines"\s*:\s*\[(.*?)\].*?"users"\s*:\s*\[(.*?)\]',
     ]
 
     found_users = set()
     for pattern in patterns:
         for match in re.finditer(pattern, text, re.DOTALL):
             name = match.group(1).strip().upper()
-            users_str = match.group(2)
+            routines_str = match.group(2)
+            users_str = match.group(3)
             users = re.findall(r'"([^"]+)"', users_str)
             valid_users = [u for u in users if u in user_set]
-            if valid_users:
+            routines = _extract_routines_from_fallback(routines_str)
+            if valid_users or routines:
                 result["clusters"].append({
                     "name": name if name.startswith("P_CJ_") else f"P_CJ_{name}",
                     "reason": "",
                     "users": valid_users,
-                    "common_routines": [],
+                    "common_routines": routines,
                 })
                 found_users.update(valid_users)
         if result["clusters"]:
@@ -399,3 +478,16 @@ def _fallback_regex_extract(text, users_data):
 
     result["unclustered"] = list(user_set - found_users)
     return result if result["clusters"] else None
+
+
+def _extract_routines_from_fallback(routines_str):
+    routines = []
+    for code in re.findall(r'"code"\s*:\s*"([^"]+)"', routines_str):
+        normalized = routine_code(code)
+        if normalized and normalized not in routines:
+            routines.append(normalized)
+    for code in re.findall(r'"([A-Z0-9#_]+)"', routines_str):
+        normalized = routine_code(code)
+        if normalized and normalized not in routines:
+            routines.append(normalized)
+    return routines

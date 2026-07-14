@@ -1,6 +1,6 @@
 import unittest
 
-from src.tier3 import build_department_analysis, build_equivalent_profile_groups, build_tier4_users, load_existing_rules, match_profile_to_existing_rules, normalize_tier3_sets, routine_permissions, user_routine_items
+from src.tier3 import apply_department_canonicalization, build_department_analysis, build_equivalent_profile_groups, build_tier4_users, load_existing_rules, match_profile_to_existing_rules, normalize_tier3_sets, routine_permissions, user_routine_items
 
 
 class Tier3FunctionalSetsTest(unittest.TestCase):
@@ -462,6 +462,97 @@ class Tier3PromptTest(unittest.TestCase):
             result["clusters"][0]["routines"],
             [{"code": "MATA010", "permissions": ["Visualizar"]}, "MATA035"],
         )
+
+
+class DepartmentCanonicalizationTest(unittest.TestCase):
+    def test_canonicalizes_obvious_department_variants_without_llm(self):
+        reports = [
+            {"user": "joao", "user_depto": " Controladoria ", "routines_summary": []},
+            {"user": "maria", "user_depto": "controladOria", "routines_summary": []},
+            {"user": "ana", "user_depto": "Controlad\u00f4ria", "routines_summary": []},
+        ]
+
+        result = apply_department_canonicalization(reports)
+
+        self.assertEqual([row["user_depto"] for row in result], ["CONTROLADORIA", "CONTROLADORIA", "CONTROLADORIA"])
+        self.assertEqual(result[0]["user_depto_original"], " Controladoria ")
+        self.assertEqual(result[0]["department_merge_source"], "deterministic")
+
+    def test_applies_llm_alias_only_when_confidence_is_high(self):
+        reports = [
+            {"user": "joao", "user_depto": "RH", "routines_summary": []},
+            {"user": "maria", "user_depto": "Recursos Humanos", "routines_summary": []},
+            {"user": "ana", "user_depto": "Recursos Humanos", "routines_summary": []},
+        ]
+
+        result = apply_department_canonicalization(
+            reports,
+            llm_result={
+                "groups": [
+                    {
+                        "canonical": "RECURSOS HUMANOS",
+                        "aliases": ["RH", "Recursos Humanos"],
+                        "confidence": 0.95,
+                    }
+                ]
+            },
+        )
+
+        self.assertEqual([row["user_depto"] for row in result], ["RECURSOS HUMANOS", "RECURSOS HUMANOS", "RECURSOS HUMANOS"])
+        self.assertEqual(result[0]["department_merge_source"], "llm")
+        self.assertEqual(result[0]["user_depto_normalized"], "RH")
+
+    def test_does_not_apply_llm_alias_below_confidence_threshold(self):
+        reports = [
+            {"user": "joao", "user_depto": "RH", "routines_summary": []},
+            {"user": "maria", "user_depto": "Recursos Humanos", "routines_summary": []},
+        ]
+
+        result = apply_department_canonicalization(
+            reports,
+            llm_result={
+                "groups": [
+                    {
+                        "canonical": "RECURSOS HUMANOS",
+                        "aliases": ["RH", "Recursos Humanos"],
+                        "confidence": 0.90,
+                    }
+                ]
+            },
+        )
+
+        self.assertEqual([row["user_depto"] for row in result], ["RH", "RECURSOS HUMANOS"])
+        self.assertEqual(result[0]["department_merge_source"], "deterministic")
+
+    def test_build_department_analysis_uses_canonical_department_names(self):
+        reports = apply_department_canonicalization([
+            {
+                "user": "joao",
+                "user_name": "Joao",
+                "user_depto": "RH",
+                "routines_summary": [{"routine": "FINA001"}],
+            },
+            {
+                "user": "maria",
+                "user_name": "Maria",
+                "user_depto": "Recursos Humanos",
+                "routines_summary": [{"routine": "FINA001"}],
+            },
+        ], llm_result={
+            "groups": [
+                {
+                    "canonical": "RECURSOS HUMANOS",
+                    "aliases": ["RH", "Recursos Humanos"],
+                    "confidence": 0.95,
+                }
+            ]
+        })
+
+        result = build_department_analysis(reports)
+
+        self.assertIn("RECURSOS HUMANOS", result)
+        self.assertEqual(result["RECURSOS HUMANOS"]["total_users"], 2)
+        self.assertNotIn("RH", result)
 
 
 if __name__ == "__main__":

@@ -15,7 +15,7 @@ import src.config as cfg
 from src.user_mapper import UserMapper
 from src.privilege_generator import PrivilegeGenerator, save_report_json
 from src.dashboard import generate_html
-from src.tier3 import build_department_analysis, build_equivalent_profile_groups, build_tier4_users, load_existing_rules, normalize_tier3_sets, routine_permissions, user_routine_items
+from src.tier3 import apply_department_canonicalization, build_department_analysis, build_equivalent_profile_groups, build_tier4_users, load_existing_rules, normalize_tier3_sets, routine_permissions, user_routine_items
 
 
 C = {
@@ -236,6 +236,7 @@ def wizard_prompt_yn(question, default="N"):
 
 def wizard_mapeamento(current_login="usr001"):
     B = C["bold"]; D = C["dim"]; R = C["reset"]; G = C["green"]; Y = C["yellow"]; CY = C["cyan"]; RD = C["red"]
+    is_org_mode = (cfg.PRIVILEGE_MODE == "organizational_layer")
 
     login = current_login
     batch = False
@@ -266,7 +267,11 @@ def wizard_mapeamento(current_login="usr001"):
     while True:
         wizard_box("WIZARD — Mapeamento de Acessos")
         wizard_step(2, 5, "Gerar script de privilegios (SQL)?")
-        info("Gera script SQL com INSERTs para a tabela SYS_RULES.")
+        if is_org_mode:
+            info("No modo organizacional, gera um SQL consolidado por camadas.")
+            info("A geracao usa todos os usuarios, mesmo que um login especifico tenha sido informado.")
+        else:
+            info("Gera script SQL com INSERTs para a tabela SYS_RULES.")
         print()
         result = wizard_prompt_yn("Gerar script SQL?", "N")
         if result is None:
@@ -276,7 +281,7 @@ def wizard_mapeamento(current_login="usr001"):
         break
 
     # ETAPA 3 — Nome da regra
-    if gen_priv:
+    if gen_priv and not is_org_mode:
         if batch:
             default_rule = "ACESSOS_BATCH"
         else:
@@ -319,7 +324,10 @@ def wizard_mapeamento(current_login="usr001"):
         wizard_step(5, 5, "Confirmacao")
 
         user_disp = login if not batch else f"{Y}TODOS (batch){R}"
-        priv_disp = f"{G}SIM{R} ({rule_name})" if gen_priv else f"{D}NAO{R}"
+        if gen_priv and is_org_mode:
+            priv_disp = f"{G}SIM{R} (SQL organizacional por camadas)"
+        else:
+            priv_disp = f"{G}SIM{R} ({rule_name})" if gen_priv else f"{D}NAO{R}"
         dash_disp = f"{G}SIM{R}" if gen_dash else f"{D}NAO{R}"
 
         wizard_summary("Resumo da operacao", [
@@ -341,6 +349,21 @@ def wizard_mapeamento(current_login="usr001"):
     # EXECUTAR
     cls()
     print(BANNER)
+
+    if is_org_mode and gen_priv:
+        if not batch:
+            warn("Modo organizacional ativo: o SQL sera gerado a partir de TODOS os usuarios.")
+            info(f"O login informado ({login}) sera usado apenas para o mapeamento individual solicitado.")
+            if gen_dash:
+                info("O dashboard individual sera gerado antes da analise organizacional.")
+            report, schema, login_result = run_mapping(login)
+            if report and gen_dash:
+                run_dashboard(login_result)
+            run_batch_organizational("2")
+            return login
+
+        run_batch_organizational("2")
+        return login
 
     if batch:
         run_batch(gen_priv=gen_priv, rule_name=rule_name, gen_dash=gen_dash)
@@ -555,7 +578,7 @@ def _run_org_analysis_with_reports(all_reports):
     if not filtered_reports:
         warn("Nenhum usuario com rotinas encontrado. Abortando.")
         return
-    all_reports = filtered_reports
+    all_reports = apply_department_canonicalization(filtered_reports)
 
     section("TIER 1 — GERAL")
     all_sets = []
@@ -1014,6 +1037,11 @@ def run_batch(choice=None, gen_priv=False, rule_name="", gen_dash=False):
         gen_dash = (choice == "3")
         rule_name = ""
 
+    if cfg.PRIVILEGE_MODE == "organizational_layer" and gen_priv:
+        warn("Modo organizacional ativo: redirecionando para geracao SQL por camadas.")
+        run_batch_organizational("2")
+        return
+
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
     section("CONEXAO")
@@ -1119,9 +1147,9 @@ def menu_parametrizacao():
 
         from src.config import API_CONFIG
         api_url_disp = API_CONFIG["base_url"][:28] if API_CONFIG["base_url"] else "(nao definido)"
-        api_token_disp = "****" if API_CONFIG["bearer_token"] else "(nao definido)"
-        api_tenant_disp = API_CONFIG["tenant_id"][:28] if API_CONFIG["tenant_id"] else "(nao definido)"
-        api_db_disp = API_CONFIG["erp_database"][:28] if API_CONFIG["erp_database"] else "(nao definido)"
+        api_user_disp = API_CONFIG.get("api_username", "")[:28] if API_CONFIG.get("api_username") else "(nao definido)"
+        api_pass_disp = "****" if API_CONFIG.get("api_password") else "(nao definido)"
+        api_tenant_disp = API_CONFIG.get("tenant_id", "")[:28] if API_CONFIG.get("tenant_id") else "(nao definido)"
 
         print(f"  {L}╔{'═' * BOX}╗{R}")
         print(row(f"{L}║{R}  {B}PARAMETRIZACAO{R}"))
@@ -1142,14 +1170,15 @@ def menu_parametrizacao():
         print(row(f"{L}║{R}  {B}6{R} │ {W}Modo de privilegio{R} [{G}{mode_disp}{R}]"))
         print(row(f"{L}║{R}  {D}{'─' * (BOX - 3)}{R}"))
         print(row(f"{L}║{R}  {B}7{R} │ {W}Testar conexao{R}"))
-        print(row(f"{L}║{R}  {B}8{R} │ {W}Salvar configuracoes{R}"))
         print(row(f"{L}║{R}  {D}{'─' * (BOX - 3)}{R}"))
         print(row(f"{L}║{R}  {B}--- API Protheus ---{R}"))
         print(row(f"{L}║{R}  {B}A{R} │ {W}Base URL ..........{R} [{D}{api_url_disp}{R}]"))
-        print(row(f"{L}║{R}  {B}B{R} │ {W}Bearer Token ......{R} [{D}{api_token_disp}{R}]"))
-        print(row(f"{L}║{R}  {B}C{R} │ {W}Tenant ID .........{R} [{D}{api_tenant_disp}{R}]"))
-        print(row(f"{L}║{R}  {B}D{R} │ {W}Banco (x-erp-db) ..{R} [{D}{api_db_disp}{R}]"))
-        print(row(f"{L}║{R}  {B}E{R} │ {W}Testar API ........{R}"))
+        print(row(f"{L}║{R}  {B}B{R} │ {W}Usuario API .......{R} [{D}{api_user_disp}{R}]"))
+        print(row(f"{L}║{R}  {B}C{R} │ {W}Senha API .........{R} [{D}{api_pass_disp}{R}]"))
+        print(row(f"{L}║{R}  {B}E{R} │ {W}Tenant ID .........{R} [{D}{api_tenant_disp}{R}]"))
+        print(row(f"{L}║{R}  {B}T{R} │ {W}Testar API + Login{R}"))
+        print(row(f"{L}║{R}  {D}{'─' * (BOX - 3)}{R}"))
+        print(row(f"{L}║{R}  {B}8{R} │ {W}Salvar configuracoes{R}"))
         print(row(f"{L}║{R}  {B}0{R} │ {RD}Voltar{R}"))
         print(f"  {L}╚{'═' * BOX}╝{R}")
         print()
@@ -1252,31 +1281,32 @@ def menu_parametrizacao():
 
         elif sub.upper() == "B":
             from src.config import API_CONFIG
-            val = input(f"  Bearer Token [****]: ").strip()
+            val = input(f"  Usuario API [{API_CONFIG.get('api_username', '')}]: ").strip()
             if val:
-                API_CONFIG["bearer_token"] = val
-                success("Bearer Token atualizado.")
+                API_CONFIG["api_username"] = val
+                success(f"Usuario API alterado para: {val}")
 
         elif sub.upper() == "C":
             from src.config import API_CONFIG
-            val = input(f"  Tenant ID [{API_CONFIG['tenant_id']}]: ").strip()
+            val = input(f"  Senha API [****]: ").strip()
+            if val:
+                API_CONFIG["api_password"] = val
+                success("Senha API atualizada.")
+
+        elif sub.upper() == "E":
+            from src.config import API_CONFIG
+            val = input(f"  Tenant ID [{API_CONFIG.get('tenant_id', '')}]: ").strip()
             if val:
                 API_CONFIG["tenant_id"] = val
                 success(f"Tenant ID alterado para: {val}")
 
-        elif sub.upper() == "D":
+        elif sub.upper() == "T":
             from src.config import API_CONFIG
-            val = input(f"  Banco x-erp-database [{API_CONFIG['erp_database']}]: ").strip()
-            if val:
-                API_CONFIG["erp_database"] = val
-                success(f"Banco API alterado para: {val}")
-
-        elif sub.upper() == "E":
-            from src.config import API_CONFIG
-            if not API_CONFIG["bearer_token"]:
-                warn("Bearer Token nao configurado. Configure primeiro (opcao B).")
+            has_auth = bool(API_CONFIG["bearer_token"]) or (bool(API_CONFIG.get("api_username")) and bool(API_CONFIG.get("api_password")))
+            if not has_auth:
+                warn("Configure usuario/senha (B e C) ou bearer_token manual (G) primeiro.")
             else:
-                spin("Testando API...", 0.6)
+                spin("Autenticando e testando API...", 1.0)
                 ok_status, msg = _test_api_connection()
                 if ok_status:
                     ok()
@@ -1691,7 +1721,7 @@ def run_llm_preview():
                 warn("Nenhum usuario com rotinas encontrado. Abortando.")
                 return
 
-            all_reports = filtered_reports
+            all_reports = apply_department_canonicalization(filtered_reports)
 
             from src.llm_categorizer import suggest_clusters, build_prompt
 
@@ -2006,7 +2036,7 @@ def run_organizational_analysis():
         warn("Nenhum usuario com rotinas encontrado. Abortando.")
         return
 
-    all_reports = filtered_reports
+    all_reports = apply_department_canonicalization(filtered_reports)
 
     section("TIER 1 — GERAL")
     all_sets = []
@@ -2375,7 +2405,7 @@ def run_batch_organizational(choice):
             if not filtered_reports:
                 warn("Nenhum usuario com rotinas. Abortando.")
                 return
-            all_reports = filtered_reports
+            all_reports = apply_department_canonicalization(filtered_reports)
 
             print(f"\n  {C['cyan']}{chr(0x2502)}{C['reset']} {C['bold']}Analisando camadas organizacionais...{C['reset']}")
 
@@ -2400,8 +2430,9 @@ def wizard_sanitation():
     wizard_box("WIZARD — Saneamento de Privilegios", "Consulta APIs oficiais do Protheus Framework")
 
     from src.config import API_CONFIG
-    if not API_CONFIG["bearer_token"]:
-        warn("Token JWT nao configurado. Configure na opcao 4 (Parametrizacao).")
+    has_auth = bool(API_CONFIG["bearer_token"]) or (bool(API_CONFIG.get("api_username")) and bool(API_CONFIG.get("api_password")))
+    if not has_auth:
+        warn("API nao configurada. Configure usuario/senha ou bearer_token na opcao 4 (Parametrizacao).")
         return
 
     while True:
@@ -2462,8 +2493,9 @@ def wizard_validation():
     wizard_box("WIZARD — Validacao Cruzada", "Compara dados SQL Server vs API REST do Protheus")
 
     from src.config import API_CONFIG
-    if not API_CONFIG["bearer_token"]:
-        warn("Token JWT nao configurado. Configure na opcao 4 (Parametrizacao).")
+    has_auth = bool(API_CONFIG["bearer_token"]) or (bool(API_CONFIG.get("api_username")) and bool(API_CONFIG.get("api_password")))
+    if not has_auth:
+        warn("API nao configurada. Configure usuario/senha ou bearer_token na opcao 4 (Parametrizacao).")
         return
 
     login = "usr001"
@@ -2546,6 +2578,8 @@ def _test_api_connection():
     try:
         from src.protheus_api import create_api
         api = create_api()
+        if api.username and api.password:
+            return api.test_full_login()
         return api.test_connection()
     except Exception as e:
         return False, str(e)
@@ -2568,7 +2602,8 @@ def menu_validacao_api():
             return f"  {text}{' ' * pad}{L}║{R}"
 
         from src.config import API_CONFIG
-        api_status = f"{C['green']}CONFIGURADO{R}" if API_CONFIG["bearer_token"] else f"{C['red']}NAO CONFIGURADO{R}"
+        has_auth = bool(API_CONFIG["bearer_token"]) or (bool(API_CONFIG.get("api_username")) and bool(API_CONFIG.get("api_password")))
+        api_status = f"{C['green']}CONFIGURADO{R}" if has_auth else f"{C['red']}NAO CONFIGURADO{R}"
 
         print(f"  {L}╔{'═' * BOX}╗{R}")
         print(row(f"{L}║{R}  {B}VALIDACAO API (Protheus Framework){R}"))

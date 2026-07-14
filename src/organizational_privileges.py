@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 from collections import Counter, defaultdict
 
@@ -6,8 +7,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from src.config import OUTPUT_DIR
 from src.discovery import column_exists
 from src.database import fetch_all, fetch_dicts
-from src.privilege_generator import save_report_json
-from src.tier3 import normalize_tier3_sets, routine_code, routine_permissions
+from src.privilege_generator import extract_auto_rule_sequence, format_auto_rule_id, save_report_json
+from src.tier3 import apply_department_canonicalization, normalize_tier3_sets, routine_code, routine_permissions
 
 C = {
     "reset": "\033[0m",   "bold": "\033[1m",
@@ -21,11 +22,16 @@ if os.name == "nt":
 
 CLUSTER_SIMILARITY_THRESHOLD = 0.4
 MIN_CLUSTER_SIZE = 2
+MANUAL_NAME_STOPWORDS = {
+    "DE", "DA", "DO", "DAS", "DOS", "E", "EM", "PARA", "COM", "SEM", "POR",
+    "ROTINA", "ROTINAS", "CADASTRO", "CONSULTA", "PROCESSO", "PROCESSOS", "RELATORIO", "RELATORIOS",
+    "SISTEMA", "GERAL", "CONTROLE", "MANUTENCAO",
+}
 
 
 class OrganizationalPrivilegeGenerator:
     def __init__(self, all_reports, schema, empresa_name, conn):
-        self.reports = all_reports
+        self.reports = apply_department_canonicalization(all_reports)
         self.schema = schema
         self.empresa_name = empresa_name
         self.conn = conn
@@ -56,7 +62,10 @@ class OrganizationalPrivilegeGenerator:
         try:
             _, rows = fetch_all(self.conn, f"SELECT MAX({pk_col}) FROM {table}")
             if rows and rows[0][0] is not None:
-                return int(rows[0][0])
+                try:
+                    return int(rows[0][0])
+                except (TypeError, ValueError):
+                    return rows[0][0]
         except Exception:
             pass
         return None
@@ -69,6 +78,35 @@ class OrganizationalPrivilegeGenerator:
             if r.get("routine") == routine_name:
                 return r.get("features", {})
         return {}
+
+    def _routine_description(self, routine_name):
+        for report in self.reports:
+            for routine in report.get("routines_summary", []):
+                if routine.get("routine") == routine_name:
+                    return str(routine.get("description", "")).strip()
+        return ""
+
+    def _suggest_manual_cluster_name(self, common_routines):
+        token_counts = Counter()
+        for routine_name in common_routines:
+            description = self._routine_description(routine_name)
+            for token in re.findall(r"[A-Z0-9À-ÿ]+", description.upper()):
+                if len(token) < 4 or token in MANUAL_NAME_STOPWORDS or token.isdigit():
+                    continue
+                token_counts[token] += 1
+
+        if token_counts:
+            label = token_counts.most_common(1)[0][0]
+            return f"P_CJ_{label}"[:20]
+
+        prefix_counts = Counter()
+        for routine_name in common_routines:
+            if not routine_name:
+                continue
+            prefix = routine_name[:4] if not routine_name[0].isdigit() else routine_name[:5]
+            prefix_counts[prefix] += 1
+        suggested_prefix = prefix_counts.most_common(1)[0][0] if prefix_counts else "CONJUNTO"
+        return f"P_CJ_{suggested_prefix}"[:20]
 
     def generate_interactive(self, llm_clusters=None):
         G = C["green"]; CY = C["cyan"]; Y = C["yellow"]; B = C["bold"]; R = C["reset"]; D = C["dim"]; W = C["white"]
@@ -178,6 +216,9 @@ class OrganizationalPrivilegeGenerator:
             return None
 
         clusters = normalize_tier3_sets(llm_result.get("clusters", []), self.reports)
+        if not clusters:
+            print(f"  {Y}LLM retornou conjuntos, mas todos foram descartados na validacao local. Alternando para modo manual (Jaccard).{R}")
+            return None
         all_users_set = set(rep["user"] for rep in self.reports)
         clustered_users = set()
         for c in clusters:
@@ -339,11 +380,7 @@ class OrganizationalPrivilegeGenerator:
         print()
 
         for idx, cl in enumerate(clusters, 1):
-            prefix_counts = Counter()
-            for rt in cl["common_routines"]:
-                prefix = rt[:4] if not rt[0].isdigit() else rt[:5]
-                prefix_counts[prefix] += 1
-            suggested_prefix = prefix_counts.most_common(1)[0][0] if prefix_counts else "CONJUNTO"
+            default_name = self._suggest_manual_cluster_name(cl["common_routines"])
 
             print(f"  {CY}{chr(0x250C)}{'─' * 50}{chr(0x2510)}{R}")
             print(f"  {CY}{chr(0x2502)}{R} {B}Conjunto #{idx}{R}")
@@ -352,10 +389,9 @@ class OrganizationalPrivilegeGenerator:
             print(f"  {CY}{chr(0x2502)}{R} Rotinas relacionadas: {len(cl['common_routines'])}")
             sample = cl["common_routines"][:6]
             print(f"  {CY}{chr(0x2502)}{R}   Ex: {', '.join(sample)}{'...' if len(cl['common_routines']) > 6 else ''}")
-            print(f"  {CY}{chr(0x2502)}{R} Sugestao de nome: {G}P_CJ_{suggested_prefix}{R}")
+            print(f"  {CY}{chr(0x2502)}{R} Sugestao de nome: {G}{default_name}{R}")
             print(f"  {CY}{chr(0x2514)}{'─' * 50}{chr(0x2518)}{R}")
 
-            default_name = f"P_CJ_{suggested_prefix}"
             name_input = input(f"  Nome do conjunto [{default_name}] (vazio = pular): ").strip()
 
             if not name_input and default_name:
@@ -412,7 +448,8 @@ class OrganizationalPrivilegeGenerator:
         rules_desc = self._resolve_col("SYS_RULES", ["RL__DESCRI", "RUL_DESCRIPTION", "DESCRIPTION", "RULES_DESC"])
 
         max_id = self._get_max_id("SYS_RULES", rules_pk)
-        self.new_rule_id = (max_id or 0) + 1
+        self.new_rule_seq = extract_auto_rule_sequence(max_id) + 1
+        self.new_rule_id = None
 
         fet_pk = self._resolve_col("SYS_RULES_FEATURES",
             ["RL__ITEM", "FET_ID", "ID", "RFE_ID"])
@@ -426,6 +463,13 @@ class OrganizationalPrivilegeGenerator:
             ["RL__ACESSO", "FET_ACCESS", "ACCESS", "RFE_ACCESS", "RFE_ACESSO"])
         fet_menuoper = self._resolve_col("SYS_RULES_FEATURES", ["RL__MENUOPER", "MENUOPER"])
         fet_menudef = self._resolve_col("SYS_RULES_FEATURES", ["RL__MENUDEF", "MENUDEF"])
+
+        trn_rul = self._resolve_col("SYS_RULES_TRANSACT", ["RL__ID", "RUL_ID", "ID"])
+        trn_func = self._resolve_col("SYS_RULES_TRANSACT", ["RL__ROTINA", "FUNCTION", "ROTINA"])
+        trn_desc = self._resolve_col("SYS_RULES_TRANSACT", ["RL__DESROT", "DESCRIPTION", "DESROT"])
+        trn_access = self._resolve_col("SYS_RULES_TRANSACT", ["RL__ACESSO", "ACCESS"])
+        trn_checksum = self._resolve_col("SYS_RULES_TRANSACT", ["RL__CHKSUM", "CHKSUM"])
+        trn_del = self._resolve_col("SYS_RULES_TRANSACT", ["D_E_L_E_T_"])
 
         usr_usr_col = self._resolve_col("SYS_RULES_USR_RULES",
             ["USER_ID", "USR_ID", "URR_USR_ID", "RUR_USR_ID"])
@@ -463,10 +507,11 @@ class OrganizationalPrivilegeGenerator:
             self._append_rule(lines, f"P_{self.empresa_name}",
                 f"Privilegio geral - {self.empresa_name}",
                 rules_pk, rules_name, rules_type, rules_desc)
-            bindings.append((self.new_rule_id - 1, all_users, f"P_{self.empresa_name}"))
+            bindings.append((self.new_rule_id, all_users, f"P_{self.empresa_name}"))
             for routine in sorted(self.tier1_routines):
                 self._append_features(lines, routine,
-                    fet_pk, fet_rul, fet_func, fet_feat, fet_access, fet_menuoper, fet_menudef)
+                    fet_pk, fet_rul, fet_func, fet_feat, fet_access, fet_menuoper, fet_menudef,
+                    trn_rul, trn_func, trn_desc, trn_access, trn_checksum, trn_del)
         else:
             lines.append("-- Nenhuma rotina comum a todos os usuarios")
             lines.append("")
@@ -484,10 +529,11 @@ class OrganizationalPrivilegeGenerator:
                 self._append_rule(lines, rule_name,
                     f"Privilegio departamento - {dept}",
                     rules_pk, rules_name, rules_type, rules_desc)
-                bindings.append((self.new_rule_id - 1, dept_users.get(dept, []), rule_name))
+                bindings.append((self.new_rule_id, dept_users.get(dept, []), rule_name))
                 for routine in sorted(routines):
                     self._append_features(lines, routine,
-                        fet_pk, fet_rul, fet_func, fet_feat, fet_access, fet_menuoper, fet_menudef)
+                        fet_pk, fet_rul, fet_func, fet_feat, fet_access, fet_menuoper, fet_menudef,
+                        trn_rul, trn_func, trn_desc, trn_access, trn_checksum, trn_del)
         else:
             lines.append("-- Nenhum departamento com rotinas comuns")
             lines.append("")
@@ -509,11 +555,12 @@ class OrganizationalPrivilegeGenerator:
                     self._append_rule(lines, group_name,
                         f"Conjunto cross-departamento - {group_name}",
                         rules_pk, rules_name, rules_type, rules_desc)
-                    bindings.append((self.new_rule_id - 1, sorted(info["members"]), group_name))
+                    bindings.append((self.new_rule_id, sorted(info["members"]), group_name))
                 if not reused:
                     for routine in sorted(info["routines"], key=lambda item: routine_code(item)):
                         self._append_features(lines, routine,
-                            fet_pk, fet_rul, fet_func, fet_feat, fet_access, fet_menuoper, fet_menudef)
+                            fet_pk, fet_rul, fet_func, fet_feat, fet_access, fet_menuoper, fet_menudef,
+                            trn_rul, trn_func, trn_desc, trn_access, trn_checksum, trn_del)
         else:
             lines.append("-- Nenhum conjunto cross-departamento")
             lines.append("")
@@ -531,10 +578,11 @@ class OrganizationalPrivilegeGenerator:
                 self._append_rule(lines, rule_name,
                     f"Privilegio exclusivo - {user}",
                     rules_pk, rules_name, rules_type, rules_desc)
-                bindings.append((self.new_rule_id - 1, [user], rule_name))
+                bindings.append((self.new_rule_id, [user], rule_name))
                 for routine in sorted(routines):
                     self._append_features(lines, routine,
-                        fet_pk, fet_rul, fet_func, fet_feat, fet_access, fet_menuoper, fet_menudef)
+                        fet_pk, fet_rul, fet_func, fet_feat, fet_access, fet_menuoper, fet_menudef,
+                        trn_rul, trn_func, trn_desc, trn_access, trn_checksum, trn_del)
         else:
             lines.append("-- Nenhum usuario com rotinas exclusivas")
             lines.append("")
@@ -548,7 +596,7 @@ class OrganizationalPrivilegeGenerator:
                 lines.append(f"-- {rule_name} ({len(users)} usuarios)")
                 for user in sorted(users):
                     lines.append(f"INSERT INTO SYS_RULES_USR_RULES ({usr_usr_col}, {usr_rul_col})")
-                    lines.append(f"VALUES ({self._sanitize(user)}, {rule_id});")
+                    lines.append(f"VALUES ({self._sanitize(user)}, {self._sanitize(rule_id)});")
                 lines.append("")
         elif not bindings:
             lines.append("-- Nenhuma vinculacao gerada (sem regras criadas)")
@@ -559,7 +607,7 @@ class OrganizationalPrivilegeGenerator:
 
         lines.append("COMMIT")
         lines.append("")
-        lines.append(f"-- Total de regras criadas: {self.new_rule_id - (max_id or 0) - 1}")
+        lines.append(f"-- Total de regras criadas: {self.new_rule_seq - (extract_auto_rule_sequence(max_id) + 1)}")
         lines.append(f"-- Total de features inseridas: {self._total_features}")
         lines.append("-- ATENCAO: Verifique os valores antes de executar em producao!")
 
@@ -571,16 +619,17 @@ class OrganizationalPrivilegeGenerator:
             f.write(sql_content)
 
         print(f"  {G}Script SQL salvo em: {B}{filepath}{R}")
-        print(f"  Regras criadas: {G}{self.new_rule_id - (max_id or 0) - 1}{R}")
+        print(f"  Regras criadas: {G}{self.new_rule_seq - (extract_auto_rule_sequence(max_id) + 1)}{R}")
         print(f"  Features inseridas: {G}{self._total_features}{R}")
 
     def _append_rule(self, lines, rule_name, rule_desc,
                      rules_pk, rules_name, rules_type, rules_desc):
         insert_cols = []
         insert_vals = []
+        self.new_rule_id = format_auto_rule_id(self.new_rule_seq)
         if rules_pk:
             insert_cols.append(rules_pk)
-            insert_vals.append(str(self.new_rule_id))
+            insert_vals.append(self._sanitize(self.new_rule_id))
         if rules_name:
             insert_cols.append(rules_name)
             insert_vals.append(self._sanitize(rule_name))
@@ -593,19 +642,22 @@ class OrganizationalPrivilegeGenerator:
         lines.append(f"INSERT INTO SYS_RULES ({', '.join(insert_cols)})")
         lines.append(f"VALUES ({', '.join(insert_vals)});")
         lines.append("")
-        self.new_rule_id += 1
+        self.new_rule_seq += 1
 
     def _append_features(self, lines, routine_name,
-                         fet_pk, fet_rul, fet_func, fet_feat, fet_access, fet_menuoper, fet_menudef):
+                         fet_pk, fet_rul, fet_func, fet_feat, fet_access, fet_menuoper, fet_menudef,
+                         trn_rul, trn_func, trn_desc, trn_access, trn_checksum, trn_del):
         required_permissions = set()
         if isinstance(routine_name, dict):
             required_permissions = set(routine_name.get("permissions", []) or [])
         routine_name = routine_code(routine_name)
         features = None
+        description = ""
         for rep in self.reports:
             for r in rep.get("routines_summary", []):
                 if r.get("routine") == routine_name:
                     feats = r.get("features", {})
+                    description = r.get("description", "")
                     if feats:
                         features = feats
                         break
@@ -617,6 +669,9 @@ class OrganizationalPrivilegeGenerator:
             feat_item = 0
         else:
             feat_item = 1
+
+        self._append_transact(lines, self.new_rule_id, routine_name, description, features,
+            trn_rul, trn_func, trn_desc, trn_access, trn_checksum, trn_del)
 
         for feat_name, feat_info in features.items():
             if required_permissions and feat_name not in required_permissions:
@@ -632,7 +687,7 @@ class OrganizationalPrivilegeGenerator:
                 insert_vals.append(str(feat_item))
             if fet_rul:
                 insert_cols.append(fet_rul)
-                insert_vals.append(str(self.new_rule_id - 1))
+                insert_vals.append(self._sanitize(self.new_rule_id))
             if fet_func:
                 insert_cols.append(fet_func)
                 insert_vals.append(self._sanitize(routine_name))
@@ -656,3 +711,35 @@ class OrganizationalPrivilegeGenerator:
             feat_item += 1
             self._total_features += 1
         lines.append("")
+
+    def _append_transact(self, lines, rule_id, routine_name, description, features,
+                         trn_rul, trn_func, trn_desc, trn_access, trn_checksum, trn_del):
+        insert_cols = []
+        insert_vals = []
+        if trn_rul:
+            insert_cols.append(trn_rul)
+            insert_vals.append(self._sanitize(rule_id))
+        if trn_func:
+            insert_cols.append(trn_func)
+            insert_vals.append(self._sanitize(routine_name))
+        if trn_desc:
+            insert_cols.append(trn_desc)
+            insert_vals.append(self._sanitize(description))
+        if trn_access:
+            access_value = "1"
+            for feat_info in (features or {}).values():
+                candidate = str(feat_info.get("access_raw", "")).strip()
+                if candidate:
+                    access_value = candidate
+                    break
+            insert_cols.append(trn_access)
+            insert_vals.append(self._sanitize(access_value))
+        if trn_checksum:
+            insert_cols.append(trn_checksum)
+            insert_vals.append(self._sanitize(""))
+        if trn_del:
+            insert_cols.append(trn_del)
+            insert_vals.append(self._sanitize(" "))
+        if insert_cols:
+            lines.append(f"INSERT INTO SYS_RULES_TRANSACT ({', '.join(insert_cols)})")
+            lines.append(f"VALUES ({', '.join(insert_vals)});")

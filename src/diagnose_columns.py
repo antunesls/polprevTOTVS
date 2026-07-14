@@ -42,6 +42,14 @@ CANDIDATES = {
         "fet_access": ["RL__ACESSO", "FET_ACCESS", "ACCESS", "RFE_ACCESS", "RFE_ACESSO"],
         "fet_del": ["D_E_L_E_T_"],
     },
+    "SYS_RULES_TRANSACT": {
+        "rules_transact_rul": ["RL__ID", "RUL_ID", "ID"],
+        "rules_transact_func": ["RL__ROTINA", "FUNCTION", "ROTINA"],
+        "rules_transact_desc": ["RL__DESROT", "DESCRIPTION", "DESROT"],
+        "rules_transact_access": ["RL__ACESSO", "ACCESS"],
+        "rules_transact_checksum": ["RL__CHKSUM", "CHKSUM"],
+        "rules_transact_del": ["D_E_L_E_T_"],
+    },
     "SYS_RULES_BUTTONS": {
     },
     "SYS_RULES_GRP_RULES": {
