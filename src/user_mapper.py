@@ -532,6 +532,47 @@ class UserMapper:
                 break
         return entries
 
+    def map_routine_users(self, routine):
+        f_pk = self.resolve_col("MPMENU_FUNCTION", ["F_ID", "ID"])
+        f_func = self.resolve_col("MPMENU_FUNCTION", ["F_FUNCTION", "FUNCTION", "F_ROTINA"])
+        if not f_func or not f_pk:
+            return {"user_ids": [], "routine": routine, "error": "MPMENU_FUNCTION not found"}
+
+        f_rows = fetch_dicts(self.conn,
+            f"SELECT {f_pk} FROM MPMENU_FUNCTION WHERE {f_func} = ?",
+            (routine,))
+        if not f_rows:
+            return {"user_ids": [], "routine": routine}
+
+        func_id = f_rows[0][f_pk]
+
+        i_menu = self.resolve_col("MPMENU_ITEM", ["I_ID_MENU", "ID_MENU", "I_MENU_ID"])
+        i_func = self.resolve_col("MPMENU_ITEM", ["I_ID_FUNC", "ID_FUNC", "I_FUNC_ID"])
+
+        if not i_func or not i_menu:
+            return {"user_ids": [], "routine": routine, "error": "MPMENU_ITEM not found"}
+
+        i_rows = fetch_dicts(self.conn,
+            f"SELECT {i_menu} FROM MPMENU_ITEM WHERE {i_func} = ?",
+            (func_id,))
+        menu_ids = list(set(r[i_menu] for r in i_rows))
+        if not menu_ids:
+            return {"user_ids": [], "routine": routine}
+
+        placeholders = ",".join("?" for _ in menu_ids)
+        usr_col = self.resolve_col("SYS_USR_MODULE", ["USR_ID", "UMD_USR_ID"])
+        menu_col = self.resolve_col("SYS_USR_MODULE", ["USR_ARQMENU", "USR_MODULO", "UMD_MENU_ID"])
+
+        user_ids = set()
+        if usr_col and menu_col:
+            rows = fetch_dicts(self.conn,
+                f"SELECT DISTINCT {usr_col} FROM SYS_USR_MODULE WHERE {menu_col} IN ({placeholders})",
+                menu_ids)
+            user_ids = set(str(r[usr_col]) for r in rows)
+
+        return {"user_ids": sorted(user_ids), "routine": routine,
+                "function_id": func_id, "menu_ids": menu_ids}
+
     def build_full_report(self, login):
         G = "\033[92m"; C = "\033[96m"; Y = "\033[93m"; D = "\033[2m"; B = "\033[1m"; R = "\033[0m"
 

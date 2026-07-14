@@ -128,7 +128,7 @@ class PrivilegeGenerator:
             lines.append("-- (serao inseridas com features padrao: Incluir, Alterar, Excluir, Consultar)")
             lines.append("")
             for routine in routines_without_priv:
-                func = routine["function_code"] or routine.get("routine", "")
+                func = routine.get("routine", "")
                 desc = routine.get("description", "")
                 if not func:
                     continue

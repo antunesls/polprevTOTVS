@@ -148,10 +148,692 @@ def run_import():
         error("Falha ao importar dados.")
 
 
+def run_clean_privileges():
+    section("LIMPAR TABELAS DE PRIVILEGIOS")
+
+    lines = []
+    lines.append("-- ==============================================")
+    lines.append("-- Script de limpeza - Tabelas de Privilegios")
+    lines.append("-- ATENCAO: Remove TODOS os registros de privilegios")
+    lines.append("-- ==============================================")
+    lines.append("")
+    lines.append("BEGIN TRANSACTION")
+    lines.append("")
+    lines.append("DELETE FROM SYS_RULES_USR_RULES;")
+    lines.append("DELETE FROM SYS_RULES_GRP_RULES;")
+    lines.append("DELETE FROM SYS_RULES_FEATURES;")
+    lines.append("DELETE FROM SYS_RULES;")
+    lines.append("")
+    lines.append("COMMIT")
+    lines.append("")
+
+    sql_content = "\n".join(lines)
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    filepath = os.path.join(OUTPUT_DIR, "clean_privileges.sql")
+    with open(filepath, "w", encoding="utf-8") as f:
+        f.write(sql_content)
+
+    success(f"Script de limpeza salvo em: {C['bold']}{filepath}{C['reset']}")
+    print()
+    info("Ordem de execucao recomendada:")
+    info("  1. Execute clean_privileges.sql no SSMS")
+    info(f"  2. Execute {cfg.EMPRESA_NAME}_organizacional.sql")
+
+
 def show_offline_banner():
     D = C["dim"]; R = C["reset"]; G = C["green"]
     print(f"  {D}─── {G}MODO OFFLINE{D} ─── Dados carregados do export.json ───{R}")
     print()
+
+
+def wizard_box(title, subtitle=None):
+    cls()
+    print(BANNER)
+    from src.database import is_offline
+    if is_offline():
+        show_offline_banner()
+    CY = C["cyan"]; R = C["reset"]; B = C["bold"]; D = C["dim"]
+    print(f"  {CY}{chr(0x2550) * 56}{R}")
+    print(f"  {CY}  {B}{title}{R}")
+    if subtitle:
+        print(f"  {CY}  {D}{subtitle}{R}")
+    print(f"  {CY}{chr(0x2550) * 56}{R}")
+    print()
+
+
+def wizard_step(step, total, text):
+    CY = C["cyan"]; B = C["bold"]; R = C["reset"]
+    print(f"  {CY}[ETAPA {step}/{total}]{R} {B}{text}{R}")
+    print()
+
+
+def wizard_summary(title, items):
+    CY = C["cyan"]; B = C["bold"]; D = C["dim"]; R = C["reset"]
+    print(f"  {CY}{chr(0x2500) * 56}{R}")
+    print(f"  {B}{title}{R}")
+    print(f"  {CY}{chr(0x2500) * 56}{R}")
+    for label, value in items:
+        print(f"  {D}{label}:{R} {value}")
+    print(f"  {CY}{chr(0x2500) * 56}{R}")
+    print()
+
+
+def wizard_prompt_yn(question, default="N"):
+    B = C["bold"]; D = C["dim"]; R = C["reset"]
+    val = input(f"  {B}{question}{R} (S/N) [{D}{default}{R} | X = cancelar]: ").strip().upper()
+    if val == "X":
+        return None
+    if val == "S":
+        return True
+    if val == "N":
+        return False
+    return default.upper() == "S"
+
+
+# ══════════════════════════════════════════════
+# WIZARD — Mapeamento de Acessos
+# ══════════════════════════════════════════════
+
+def wizard_mapeamento(current_login="usr001"):
+    B = C["bold"]; D = C["dim"]; R = C["reset"]; G = C["green"]; Y = C["yellow"]; CY = C["cyan"]; RD = C["red"]
+
+    login = current_login
+    batch = False
+    gen_priv = False
+    rule_name = ""
+    gen_dash = False
+
+    wizard_box("WIZARD — Mapeamento de Acessos", "Passo a passo para mapear usuarios e gerar artefatos")
+
+    # ETAPA 1 — Usuario
+    while True:
+        wizard_box("WIZARD — Mapeamento de Acessos")
+        wizard_step(1, 5, "Qual usuario deseja mapear?")
+        info("Digite o login do usuario ou ENTER para mapear TODOS os usuarios.")
+        print()
+        val = input(f"  {B}Usuario{R} [{D}{login} | ENTER = TODOS | X = cancelar{R}]: ").strip()
+        if val.upper() == "X":
+            info("Wizard cancelado.")
+            return current_login
+        if val:
+            login = val
+            batch = False
+        else:
+            batch = True
+        break
+
+    # ETAPA 2 — Gerar privilegios?
+    while True:
+        wizard_box("WIZARD — Mapeamento de Acessos")
+        wizard_step(2, 5, "Gerar script de privilegios (SQL)?")
+        info("Gera script SQL com INSERTs para a tabela SYS_RULES.")
+        print()
+        result = wizard_prompt_yn("Gerar script SQL?", "N")
+        if result is None:
+            info("Wizard cancelado.")
+            return login
+        gen_priv = result
+        break
+
+    # ETAPA 3 — Nome da regra
+    if gen_priv:
+        if batch:
+            default_rule = "ACESSOS_BATCH"
+        else:
+            default_rule = f"ACESSOS_{login.upper()[:8]}"
+        while True:
+            wizard_box("WIZARD — Mapeamento de Acessos")
+            wizard_step(3, 5, "Nome do grupo de regras")
+            info("Identificador do grupo de regras no Protheus (max 10 caracteres).")
+            print()
+            val = input(f"  {B}Nome da regra{R} [{D}{default_rule} | X = cancelar{R}]: ").strip()
+            if val.upper() == "X":
+                info("Wizard cancelado.")
+                return login
+            if val:
+                rule_name = val
+            else:
+                rule_name = default_rule
+            break
+    else:
+        rule_name = ""
+
+    # ETAPA 4 — Dashboard?
+    step_disp = "4/5" if gen_priv else "3/5"
+    step_num = 4 if gen_priv else 3
+    while True:
+        wizard_box("WIZARD — Mapeamento de Acessos")
+        wizard_step(step_num, 5, "Gerar dashboard HTML?")
+        info("Gera um dashboard grafico com a arvore de menus e permissoes.")
+        print()
+        result = wizard_prompt_yn("Gerar dashboard?", "N")
+        if result is None:
+            info("Wizard cancelado.")
+            return login
+        gen_dash = result
+        break
+
+    # ETAPA 5 — Confirmacao
+    while True:
+        wizard_box("WIZARD — Mapeamento de Acessos")
+        wizard_step(5, 5, "Confirmacao")
+
+        user_disp = login if not batch else f"{Y}TODOS (batch){R}"
+        priv_disp = f"{G}SIM{R} ({rule_name})" if gen_priv else f"{D}NAO{R}"
+        dash_disp = f"{G}SIM{R}" if gen_dash else f"{D}NAO{R}"
+
+        wizard_summary("Resumo da operacao", [
+            ("Usuario       ", user_disp),
+            ("Gerar SQL     ", priv_disp),
+            ("Gerar Dashboard", dash_disp),
+        ])
+
+        val = input(f"  {B}[S]{R} Executar  {D}[E]{R} Refazer  {D}[X]{R} Cancelar\n  {B}Opcao:{R} ").strip().upper()
+
+        if val == "X":
+            info("Wizard cancelado.")
+            return login
+        if val == "S":
+            break
+        if val == "E":
+            return wizard_mapeamento(login)
+
+    # EXECUTAR
+    cls()
+    print(BANNER)
+
+    if batch:
+        run_batch(gen_priv=gen_priv, rule_name=rule_name, gen_dash=gen_dash)
+    else:
+        report, schema, login_result = run_mapping(login)
+        if report:
+            if gen_priv:
+                run_generate_privileges(report, schema, login_result, rule_name=rule_name)
+            if gen_dash:
+                run_dashboard(login_result)
+
+    return login
+
+
+# ══════════════════════════════════════════════
+# WIZARD — Exportar Dados
+# ══════════════════════════════════════════════
+
+def wizard_export():
+    B = C["bold"]; D = C["dim"]; R = C["reset"]; G = C["green"]
+
+    wizard_box("WIZARD — Exportar Dados", "Gerar script SQL para extracao offline")
+
+    # ETAPA 1 — Confirmacao
+    while True:
+        wizard_box("WIZARD — Exportar Dados")
+        wizard_step(1, 2, "Confirmar exportacao")
+        info("Sera gerado um script SQL para extrair todas as tabelas do schema.")
+        info("Execute o script no SSMS e salve o resultado como export.json.")
+        print()
+        result = wizard_prompt_yn("Confirmar exportacao?", "S")
+        if result is None:
+            info("Wizard cancelado.")
+            return
+        if not result:
+            info("Exportacao cancelada.")
+            return
+        break
+
+    # ETAPA 2 — Executar
+    wizard_box("WIZARD — Exportar Dados")
+    wizard_step(2, 2, "Executando...")
+    run_export()
+
+
+# ══════════════════════════════════════════════
+# WIZARD — Importar Dados
+# ══════════════════════════════════════════════
+
+def wizard_import():
+    B = C["bold"]; D = C["dim"]; R = C["reset"]; G = C["green"]
+
+    wizard_box("WIZARD — Importar Dados", "Carregar dados offline (export.json)")
+
+    default_path = os.path.join(OUTPUT_DIR, "export.json")
+    json_path = default_path
+
+    # ETAPA 1 — Caminho do arquivo
+    while True:
+        wizard_box("WIZARD — Importar Dados")
+        wizard_step(1, 2, "Caminho do arquivo JSON")
+        info("Arquivo export.json gerado pela opcao de exportacao.")
+        print()
+        val = input(f"  {B}Caminho{R} [{D}{default_path} | X = cancelar{R}]: ").strip()
+        if val.upper() == "X":
+            info("Wizard cancelado.")
+            return
+        if val:
+            json_path = val
+        elif not os.path.exists(json_path):
+            error(f"Arquivo padrao nao encontrado: {json_path}")
+            continue
+        if not os.path.exists(json_path):
+            error(f"Arquivo nao encontrado: {json_path}")
+            continue
+        break
+
+    # ETAPA 2 — Confirmar e executar
+    while True:
+        wizard_box("WIZARD — Importar Dados")
+        wizard_step(2, 2, "Confirmacao")
+        wizard_summary("Resumo da operacao", [
+            ("Arquivo", f"{G}{json_path}{R}"),
+        ])
+        val = input(f"  {B}[S]{R} Importar  {D}[E]{R} Alterar caminho  {D}[X]{R} Cancelar\n  {B}Opcao:{R} ").strip().upper()
+        if val == "X":
+            info("Wizard cancelado.")
+            return
+        if val == "S":
+            break
+        if val == "E":
+            return wizard_import()
+
+    cls()
+    print(BANNER)
+    section("IMPORTAR DADOS")
+    from src.data_importer import import_and_set_offline
+    if import_and_set_offline(json_path):
+        info("Modo offline ativo. Pronto para processar.")
+        print()
+        info("Proximos passos:")
+        info("  - Opcao 1: Mapear acessos de um usuario")
+    else:
+        error("Falha ao importar dados.")
+
+
+# ══════════════════════════════════════════════
+# WIZARD — Limpar Tabelas
+# ══════════════════════════════════════════════
+
+def wizard_clean():
+    B = C["bold"]; D = C["dim"]; R = C["reset"]; G = C["green"]; RD = C["red"]
+
+    wizard_box("WIZARD — Limpar Tabelas", "Gerar script DELETE para tabelas de privilegios")
+
+    # ETAPA 1 — Confirmacao com alerta
+    while True:
+        wizard_box("WIZARD — Limpar Tabelas")
+        wizard_step(1, 2, "Confirmacao — ATENCAO!")
+        warn("Esta operacao gera um script SQL que remove TODOS os registros")
+        warn("das tabelas de privilegios (SYS_RULES, SYS_RULES_USR_RULES,")
+        warn("SYS_RULES_GRP_RULES, SYS_RULES_FEATURES).")
+        print()
+        result = wizard_prompt_yn("Confirmar geracao do script de limpeza?", "N")
+        if result is None:
+            info("Wizard cancelado.")
+            return
+        if not result:
+            info("Limpeza cancelada.")
+            return
+        break
+
+    # ETAPA 2 — Executar
+    wizard_box("WIZARD — Limpar Tabelas")
+    wizard_step(2, 2, "Executando...")
+    run_clean_privileges()
+
+
+# ══════════════════════════════════════════════
+# WIZARD — Analise Organizacional
+# ══════════════════════════════════════════════
+
+def wizard_org_analysis():
+    B = C["bold"]; D = C["dim"]; R = C["reset"]; G = C["green"]
+
+    wizard_box("WIZARD — Analise Organizacional", "Mapeia usuarios e analisa camadas (Tiers 1-4)")
+
+    # ETAPA 1 — Fonte dos dados
+    while True:
+        wizard_box("WIZARD — Analise Organizacional")
+        wizard_step(1, 2, "Fonte dos dados")
+        info("Escolha como obter os dados dos usuarios.")
+        print()
+        print(f"  {B}[M]{R} Mapear do banco (completo)")
+        print(f"     {D}Conecta ao SQL Server e mapeia todos os usuarios{R}")
+        print()
+        print(f"  {B}[R]{R} Reusar arquivos mapeados (rapido)")
+        print(f"     {D}Carrega os *_access.json ja existentes na pasta output/{R}")
+        print()
+        val = input(f"  {B}Opcao{R} [X = cancelar]: ").strip().upper()
+        if val == "X":
+            info("Wizard cancelado.")
+            return
+        if val in ("M", "R"):
+            break
+        error("Opcao invalida. Use M ou R.")
+
+    # ETAPA 2 — Confirmar e executar
+    while True:
+        wizard_box("WIZARD — Analise Organizacional")
+        wizard_step(2, 2, "Confirmacao")
+        fonte_disp = f"{G}Banco SQL Server{R}" if val == "M" else f"{G}Arquivos output/{R}"
+        wizard_summary("Resumo da operacao", [
+            ("Fonte dos dados", fonte_disp),
+            ("Empresa        ", f"{G}{cfg.EMPRESA_NAME}{R}"),
+        ])
+        action = input(f"  {B}[S]{R} Executar  {D}[E]{R} Alterar  {D}[X]{R} Cancelar\n  {B}Opcao:{R} ").strip().upper()
+        if action == "X":
+            info("Wizard cancelado.")
+            return
+        if action == "S":
+            break
+        if action == "E":
+            return wizard_org_analysis()
+
+    cls()
+    print(BANNER)
+    if val == "R":
+        all_reports = _load_reports_from_files()
+        if not all_reports:
+            error("Nenhum arquivo *_access.json encontrado em output/.")
+            return
+        print(f"  {C['green']}Carregados {len(all_reports)} relatorios.{C['reset']}")
+        _run_org_analysis_with_reports(all_reports)
+    else:
+        run_organizational_analysis()
+
+
+def _run_org_analysis_with_reports(all_reports):
+    global _saved_llm_clusters
+    G = C["green"]; CY = C["cyan"]; D = C["dim"]; B = C["bold"]; Y = C["yellow"]; R = C["reset"]
+
+    zero_routine_users = []
+    filtered_reports = []
+    for rep in all_reports:
+        if len(rep.get("routines_summary", [])) == 0:
+            zero_routine_users.append(rep["user"])
+        else:
+            filtered_reports.append(rep)
+    if zero_routine_users:
+        print(f"  {Y}[FILTRO]{R} {len(zero_routine_users)} usuarios sem rotinas ignorados.")
+    if not filtered_reports:
+        warn("Nenhum usuario com rotinas encontrado. Abortando.")
+        return
+    all_reports = filtered_reports
+
+    section("TIER 1 — GERAL")
+    all_sets = []
+    for rep in all_reports:
+        rset = set(r["routine"] for r in rep.get("routines_summary", []) if r.get("routine"))
+        all_sets.append(rset)
+    tier1_common = all_sets[0].copy()
+    for s in all_sets[1:]:
+        tier1_common &= s
+    print(f"  Rotinas comuns a TODOS ({len(all_reports)} usuarios): {G}{len(tier1_common)}{R}")
+
+    tier1_routines = []
+    routines_details = {}
+    for rep in all_reports:
+        for r in rep.get("routines_summary", []):
+            code = r.get("routine", "")
+            if code not in routines_details:
+                routines_details[code] = r.get("description", "")
+    for code in sorted(tier1_common):
+        tier1_routines.append({"code": code, "desc": routines_details.get(code, "")})
+
+    section("TIER 2 — DEPARTAMENTOS")
+    dept_users = {}
+    for rep in all_reports:
+        dept = rep.get("user_depto", "").strip()
+        if not dept:
+            dept = "SEM_DEPARTAMENTO"
+        if dept not in dept_users:
+            dept_users[dept] = []
+        dept_users[dept].append(rep)
+    tier2_data = []
+    for dept_name in sorted(dept_users.keys()):
+        reps = dept_users[dept_name]
+        if len(reps) < 2:
+            continue
+        d_sets = []
+        for rep in reps:
+            rset = set(r["routine"] for r in rep.get("routines_summary", []) if r.get("routine"))
+            d_sets.append(rset)
+        common = d_sets[0].copy()
+        for s in d_sets[1:]:
+            common &= s
+        if common:
+            dept_routines = []
+            for code in sorted(common):
+                dept_routines.append({"code": code, "desc": routines_details.get(code, "")})
+            tier2_data.append({
+                "depto": dept_name,
+                "routines": dept_routines,
+                "users": [r["user"] for r in reps],
+            })
+            print(f"  {G}{dept_name}{R}: {len(reps)} usuarios, {len(common)} rotinas comuns")
+    print(f"  Departamentos com rotinas comuns: {G}{len(tier2_data)}{R}")
+
+    section("TIER 3 — PERFIS E CONJUNTOS FUNCIONAIS")
+    tier3_clusters = []
+    tier2_routines_map = {}
+    for d in tier2_data:
+        tier2_routines_map[d["depto"]] = set(r["code"] for r in d["routines"])
+    profile_groups = build_equivalent_profile_groups(all_reports, tier1_common, tier2_routines_map)
+    if profile_groups:
+        tier3_clusters.extend(profile_groups)
+        print(f"  Perfis equivalentes automaticos: {G}{len(profile_groups)}{R}")
+    users_data = []
+    for rep in all_reports:
+        routines = []
+        for r in rep.get("routines_summary", []):
+            code = r.get("routine", "")
+            desc = r.get("description", "")
+            if code:
+                routines.append({"code": code, "description": desc, "permissions": routine_permissions(r)})
+        users_data.append({"user": rep["user"], "routines": routines})
+    if cfg.LLM_API_KEY:
+        from src.llm_categorizer import suggest_clusters
+        llm_result = suggest_clusters(users_data)
+        if llm_result and llm_result.get("clusters"):
+            tier3_clusters.extend(normalize_tier3_sets(llm_result.get("clusters", []), all_reports))
+        else:
+            warn("LLM nao retornou conjuntos funcionais validos.")
+    else:
+        info("Sem LLM configurada. Tier 3 vazio — ajuste manualmente no dashboard.")
+    tier3_users = set()
+    for c in tier3_clusters:
+        tier3_users.update(c.get("users", []))
+    tier3_unclustered = sorted(set(rep["user"] for rep in all_reports) - tier3_users)
+
+    section("TIER 4 — EXCLUSIVO POR USUARIO")
+    tier4_users = build_tier4_users(all_reports, tier1_common, tier2_routines_map, tier3_clusters)
+    exclusive_count = sum(1 for u in tier4_users if u["exclusive_count"] > 0)
+    print(f"  Usuarios com rotinas exclusivas: {G}{exclusive_count}{R}")
+
+    section("DASHBOARD")
+    users_detail = {}
+    user_routines_raw = {}
+    user_dept_map = {}
+    for rep in all_reports:
+        login = rep["user"]
+        top_routines = []
+        for r in rep.get("routines_summary", [])[:20]:
+            code = r.get("routine", "")
+            desc = r.get("description", "")
+            top_routines.append(f"{code} - {desc}" if desc else code)
+        users_detail[login] = {
+            "name": rep.get("user_name", login),
+            "login": login,
+            "depto": rep.get("user_depto", "") or "SEM_DEPARTAMENTO",
+            "total_routines": rep.get("total_routines", 0),
+            "all_routines": top_routines,
+        }
+        user_routines_raw[login] = user_routine_items(rep)
+        user_dept_map[login] = rep.get("user_depto", "").strip() or "SEM_DEPARTAMENTO"
+    html_path = os.path.join(OUTPUT_DIR, f"camadas_{cfg.EMPRESA_NAME}.html")
+    from src.html_report import generate_cluster_html
+    generate_cluster_html(
+        {"routines": tier1_routines, "total_users": len(all_reports), "empresa": cfg.EMPRESA_NAME},
+        tier2_data, tier3_clusters, tier3_unclustered,
+        {"users": tier4_users},
+        users_detail, user_routines_raw, user_dept_map,
+        html_path, cfg.EMPRESA_NAME,
+    )
+    dept_html_path = os.path.join(OUTPUT_DIR, f"camadas_departamentos_{cfg.EMPRESA_NAME}.html")
+    from src.department_html_report import generate_department_html
+    try:
+        with get_connection() as rules_conn:
+            existing_rules = load_existing_rules(rules_conn)
+    except Exception:
+        existing_rules = None
+    generate_department_html(
+        build_department_analysis(all_reports, existing_rules=existing_rules),
+        dept_html_path, cfg.EMPRESA_NAME,
+    )
+    import webbrowser
+    webbrowser.open(f"file://{os.path.abspath(html_path)}")
+    print(f"  {G}Dashboard gerado:{R} {html_path}")
+    print(f"  {G}Dashboard por departamento gerado:{R} {dept_html_path}")
+    print(f"  {CY}O navegador foi aberto com as 4 camadas.{R}")
+    print()
+    json_path = os.path.join(OUTPUT_DIR, f"clusters_{cfg.EMPRESA_NAME}.json")
+    print(f"  {CY}{chr(0x2554)}{'═' * 54}{chr(0x2557)}{R}")
+    print(f"  {CY}{chr(0x2551)}{R} {B}[C]{R} Carregar JSON de {OUTPUT_DIR}/clusters_{cfg.EMPRESA_NAME}.json")
+    print(f"  {CY}{chr(0x2551)}{R} {B}[V]{R} Voltar (descartar tudo)")
+    print(f"  {CY}{chr(0x255A)}{'═' * 54}{chr(0x255D)}{R}")
+    action2 = input(f"  Opcao: ").strip().upper()
+    if action2 == "V":
+        info("Conjuntos funcionais descartados.")
+        return
+    if action2 == "C":
+        if not os.path.exists(json_path):
+            warn(f"Arquivo nao encontrado: {json_path}")
+            return
+        with open(json_path, "r", encoding="utf-8") as f:
+            loaded = json.load(f)
+        tier3_saved = loaded.get("tier3", loaded).get("clusters", loaded.get("clusters", []))
+        if not tier3_saved:
+            warn("JSON nao contem conjuntos funcionais do Tier 3.")
+            return
+        _saved_llm_clusters = tier3_saved
+        ok(f"{len(tier3_saved)} conjuntos funcionais carregados. Use opcao 3 para gerar o SQL.")
+    else:
+        warn("Opcao invalida. Conjuntos funcionais descartados.")
+
+
+# ══════════════════════════════════════════════
+# WIZARD — Gerar SQL Organizacional
+# ══════════════════════════════════════════════
+
+def wizard_org_sql():
+    B = C["bold"]; D = C["dim"]; R = C["reset"]; G = C["green"]
+
+    wizard_box("WIZARD — Gerar SQL Organizacional", "Carrega JSON ajustado e gera script INSERTs SYS_RULES")
+
+    json_path = os.path.join(OUTPUT_DIR, f"clusters_{cfg.EMPRESA_NAME}.json")
+
+    # ETAPA 1 — Confirmar arquivo
+    while True:
+        wizard_box("WIZARD — Gerar SQL Organizacional")
+        wizard_step(1, 2, "Confirmar arquivo de conjuntos")
+        info(f"Arquivo esperado: {D}{json_path}{R}")
+        if not os.path.exists(json_path):
+            warn(f"Arquivo nao encontrado: {json_path}")
+            info("Execute a opcao 2 (Analise Organizacional) primeiro.")
+            return
+        print()
+        val = input(f"  {B}Confirmar arquivo?{R} (S/N) [S | X = cancelar]: ").strip().upper()
+        if val == "X":
+            info("Wizard cancelado.")
+            return
+        if val == "N":
+            info("Operacao cancelada.")
+            return
+        break
+
+    # ETAPA 2 — Executar
+    wizard_box("WIZARD — Gerar SQL Organizacional")
+    wizard_step(2, 2, "Executando...")
+    run_generate_org_sql()
+
+
+def wizard_ferramentas():
+    B = C["bold"]; D = C["dim"]; W = C["white"]; RD = C["red"]; R = C["reset"]
+    while True:
+        cls()
+        print(BANNER)
+        from src.database import is_offline
+        if is_offline():
+            show_offline_banner()
+        L = C["cyan"]; CY = C["cyan"]
+        BOX = 52
+        def row(text):
+            import re
+            v = re.sub(r"\033\[[0-9;]*m", "", text)
+            pad = BOX - len(v)
+            return f"  {text}{' ' * pad}{L}║{R}"
+        print(f"  {L}╔{'═' * BOX}╗{R}")
+        print(row(f"{L}║{R}  {B}FERRAMENTAS{R}"))
+        print(row(f"{L}║{R}  {D}{'─' * (BOX - 3)}{R}"))
+        print(row(f"{L}║{R}  {B}1{R} │ {W}Exportar dados (SQL){R}"))
+        print(row(f"{L}║{R}    │ {D}Gerar query para extracao offline{R}"))
+        print(row(f"{L}║{R}  {B}2{R} │ {W}Importar dados (JSON){R}"))
+        print(row(f"{L}║{R}    │ {D}Carregar export.json p/ modo offline{R}"))
+        print(row(f"{L}║{R}  {B}3{R} │ {W}Limpar tabelas de privilegios{R}"))
+        print(row(f"{L}║{R}    │ {D}Script DELETE p/ SYS_RULES e relacionadas{R}"))
+        print(row(f"{L}║{R}  {B}0{R} │ {RD}Voltar{R}"))
+        print(f"  {L}╚{'═' * BOX}╝{R}")
+        print()
+        sub = input(f"  {B}Opcao:{R} ").strip()
+        cls()
+        if sub == "0":
+            break
+        elif sub == "1":
+            wizard_export()
+        elif sub == "2":
+            wizard_import()
+        elif sub == "3":
+            wizard_clean()
+        else:
+            print(f"\n  {C['red']}Opcao invalida!{C['reset']}\n")
+
+
+def menu_camadas_org():
+    B = C["bold"]; D = C["dim"]; W = C["white"]; RD = C["red"]; R = C["reset"]
+    while True:
+        cls()
+        print(BANNER)
+        from src.database import is_offline
+        if is_offline():
+            show_offline_banner()
+        L = C["cyan"]
+        BOX = 52
+        def row(text):
+            import re
+            v = re.sub(r"\033\[[0-9;]*m", "", text)
+            pad = BOX - len(v)
+            return f"  {text}{' ' * pad}{L}║{R}"
+        print(f"  {L}╔{'═' * BOX}╗{R}")
+        print(row(f"{L}║{R}  {B}CAMADAS ORGANIZACIONAIS{R}"))
+        print(row(f"{L}║{R}  {D}{'─' * (BOX - 3)}{R}"))
+        print(row(f"{L}║{R}  {B}1{R} │ {W}Analisar camadas (Tiers 1-4){R}"))
+        print(row(f"{L}║{R}    │ {D}Wizard: mapeia TODOS → Dashboard 4 tiers{R}"))
+        print(row(f"{L}║{R}  {B}2{R} │ {W}Gerar SQL organizacional{R}"))
+        print(row(f"{L}║{R}    │ {D}Wizard: JSON ajustado → Script SYS_RULES{R}"))
+        print(row(f"{L}║{R}  {B}3{R} │ {W}Wizard Organizacional{R}"))
+        print(row(f"{L}║{R}    │ {D}Configurar modo por camada (passo a passo){R}"))
+        print(row(f"{L}║{R}  {B}0{R} │ {RD}Voltar{R}"))
+        print(f"  {L}╚{'═' * BOX}╝{R}")
+        print()
+        sub = input(f"  {B}Opcao:{R} ").strip()
+        cls()
+        if sub == "0":
+            break
+        elif sub == "1":
+            wizard_org_analysis()
+        elif sub == "2":
+            wizard_org_sql()
+        elif sub == "3":
+            wizard_organizacional()
+        else:
+            print(f"\n  {C['red']}Opcao invalida!{C['reset']}\n")
 
 
 def menu():
@@ -171,35 +853,28 @@ def menu():
     is_org = (cfg.PRIVILEGE_MODE == "organizational_layer")
 
     print(f"  {L}╔{'═' * BOX}╗{R}")
-    print(row(f"{L}║{R}  {B}1{R} │ {W}Mapear acessos do usuario{R}"))
-    print(row(f"{L}║{R}    │ {D}Relatorio JSON com rotinas e permissoes{R}"))
+    print(row(f"{L}║{R}  {B}1{R} │ {W}Mapear acessos de usuarios (Wizard){R}"))
+    print(row(f"{L}║{R}    │ {D}Relatorio JSON + SQL + Dashboard{R}"))
+
+    print(row(f"{L}║{R}  {B}2{R} │ {W}Ferramentas{R}"))
+    print(row(f"{L}║{R}    │ {D}Exportar, importar e limpar tabelas{R}"))
 
     if is_org:
-        print(row(f"{L}║{R}  {B}2{R} │ {W}Analisar camadas organizacionais{R}"))
-        print(row(f"{L}║{R}    │ {D}Mapeia TODOS → LLM sugere conjuntos → Dashboard 4 tiers{R}"))
-        print(row(f"{L}║{R}  {B}3{R} │ {W}Gerar SQL organizacional{R}"))
-        print(row(f"{L}║{R}    │ {D}Carrega JSON ajustado → Script INSERTs SYS_RULES{R}"))
-    else:
-        print(row(f"{L}║{R}  {B}2{R} │ {W}Mapear + Gerar grupo de privilegios{R}"))
-        print(row(f"{L}║{R}    │ {D}Relatorio JSON + Script SQL p/ SYS_RULES{R}"))
-        print(row(f"{L}║{R}  {B}3{R} │ {W}Mapear + Gerar dashboard HTML{R}"))
-        print(row(f"{L}║{R}    │ {D}Relatorio JSON + Dashboard grafico{R}"))
+        print(row(f"{L}║{R}  {B}3{R} │ {W}Camadas organizacionais{R}"))
+        print(row(f"{L}║{R}    │ {D}Analisar, gerar SQL e configurar modo{R}"))
 
+    print(row(f"{L}║{R}  {D}{'─' * (BOX - 3)}{R}"))
     print(row(f"{L}║{R}  {B}4{R} │ {W}Parametrizacao{R}"))
     print(row(f"{L}║{R}    │ {D}Configurar banco, LLM e preferencias{R}"))
+
+    print(row(f"{L}║{R}  {B}5{R} │ {W}Validacao API (Protheus){R}"))
+    print(row(f"{L}║{R}    │ {D}Saneamento e validacao cruzada via API{R}"))
 
     if is_org:
         print(row(f"{L}║{R}  {D}{'─' * (BOX - 3)}{R}"))
         print(row(f"{L}║{R}  {D}  Modo: {G}CAMADA ORGANIZACIONAL{R}"))
         print(row(f"{L}║{R}    │ Empresa: {G}{cfg.EMPRESA_NAME}{R}  |  LLM: {G}{'ON' if cfg.LLM_API_KEY else 'OFF'}{R}"))
 
-    print(row(f"{L}║{R}  {B}5{R} │ {W}Exportar dados (SQL){R}"))
-    print(row(f"{L}║{R}    │ {D}Gerar query para extracao offline{R}"))
-    print(row(f"{L}║{R}  {B}6{R} │ {W}Importar dados (JSON){R}"))
-    print(row(f"{L}║{R}    │ {D}Carregar export.json p/ modo offline{R}"))
-    if is_org:
-        print(row(f"{L}║{R}  {B}9{R} │ {W}Wizard Organizacional{R}"))
-        print(row(f"{L}║{R}    │ {D}Configurar modo por camada (passo a passo){R}"))
     print(row(f"{L}║{R}  {B}0{R} │ {RD}Sair{R}"))
     print(f"  {L}╚{'═' * BOX}╝{R}")
     print()
@@ -278,17 +953,18 @@ def run_mapping(login):
         return None, None, login
 
 
-def run_generate_privileges(report, schema, login):
+def run_generate_privileges(report, schema, login, rule_name=None):
     if report is None:
         warn("Sem dados de mapeamento. Execute a opcao 1 primeiro.")
         return
 
     section("PRIVILEGIOS")
     info("Gerando script SQL...")
-    default_rule = f"ACESSOS_{login.upper()[:8]}"
-    rule_name = input(f"  {C['bold']}Nome do grupo de regras [{C['dim']}{default_rule}{C['reset']}]:{C['reset']} ").strip()
-    if not rule_name:
-        rule_name = default_rule
+    if rule_name is None:
+        default_rule = f"ACESSOS_{login.upper()[:8]}"
+        rule_name = input(f"  {C['bold']}Nome do grupo de regras [{C['dim']}{default_rule}{C['reset']}]:{C['reset']} ").strip()
+        if not rule_name:
+            rule_name = default_rule
 
     generator = PrivilegeGenerator(report, schema)
     sql = generator.generate_sql(rule_name)
@@ -332,7 +1008,12 @@ def spin(text, duration=1.0):
         i += 1
 
 
-def run_batch(choice):
+def run_batch(choice=None, gen_priv=False, rule_name="", gen_dash=False):
+    if choice is not None:
+        gen_priv = (choice == "2")
+        gen_dash = (choice == "3")
+        rule_name = ""
+
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
     section("CONEXAO")
@@ -378,14 +1059,14 @@ def run_batch(choice):
                     json_path = save_report_json(report, login)
                     info(f"  JSON salvo: {json_path}")
 
-                    if choice == "2":
-                        default_rule = f"ACESSOS_{login.upper()[:8]}"
+                    if gen_priv:
+                        default_rule = rule_name if rule_name else f"ACESSOS_{login.upper()[:8]}"
                         generator = PrivilegeGenerator(report, schema)
                         sql = generator.generate_sql(default_rule)
                         sql_path = generator.save_sql(sql, f"{login}_privileges.sql")
                         info(f"  Script SQL: {sql_path}")
 
-                    if choice == "3":
+                    if gen_dash:
                         html_path = generate_html(json_path)
                         per_user_html = os.path.join(OUTPUT_DIR, f"{login}_dashboard.html")
                         if os.path.exists(html_path):
@@ -436,6 +1117,12 @@ def menu_parametrizacao():
         llm_model_disp = cfg.LLM_MODEL[:28] if cfg.LLM_MODEL else "(nao definido)"
         llm_url_disp = cfg.LLM_BASE_URL[:28] if cfg.LLM_BASE_URL else "(nao definido)"
 
+        from src.config import API_CONFIG
+        api_url_disp = API_CONFIG["base_url"][:28] if API_CONFIG["base_url"] else "(nao definido)"
+        api_token_disp = "****" if API_CONFIG["bearer_token"] else "(nao definido)"
+        api_tenant_disp = API_CONFIG["tenant_id"][:28] if API_CONFIG["tenant_id"] else "(nao definido)"
+        api_db_disp = API_CONFIG["erp_database"][:28] if API_CONFIG["erp_database"] else "(nao definido)"
+
         print(f"  {L}╔{'═' * BOX}╗{R}")
         print(row(f"{L}║{R}  {B}PARAMETRIZACAO{R}"))
         print(row(f"{L}║{R}  {D}{'─' * (BOX - 3)}{R}"))
@@ -456,6 +1143,13 @@ def menu_parametrizacao():
         print(row(f"{L}║{R}  {D}{'─' * (BOX - 3)}{R}"))
         print(row(f"{L}║{R}  {B}7{R} │ {W}Testar conexao{R}"))
         print(row(f"{L}║{R}  {B}8{R} │ {W}Salvar configuracoes{R}"))
+        print(row(f"{L}║{R}  {D}{'─' * (BOX - 3)}{R}"))
+        print(row(f"{L}║{R}  {B}--- API Protheus ---{R}"))
+        print(row(f"{L}║{R}  {B}A{R} │ {W}Base URL ..........{R} [{D}{api_url_disp}{R}]"))
+        print(row(f"{L}║{R}  {B}B{R} │ {W}Bearer Token ......{R} [{D}{api_token_disp}{R}]"))
+        print(row(f"{L}║{R}  {B}C{R} │ {W}Tenant ID .........{R} [{D}{api_tenant_disp}{R}]"))
+        print(row(f"{L}║{R}  {B}D{R} │ {W}Banco (x-erp-db) ..{R} [{D}{api_db_disp}{R}]"))
+        print(row(f"{L}║{R}  {B}E{R} │ {W}Testar API ........{R}"))
         print(row(f"{L}║{R}  {B}0{R} │ {RD}Voltar{R}"))
         print(f"  {L}╚{'═' * BOX}╝{R}")
         print()
@@ -548,6 +1242,48 @@ def menu_parametrizacao():
         elif sub == "8":
             save_user_config()
             success(f"Configuracoes salvas em config_user.json")
+
+        elif sub.upper() == "A":
+            from src.config import API_CONFIG
+            val = input(f"  Base URL [{API_CONFIG['base_url']}]: ").strip()
+            if val:
+                API_CONFIG["base_url"] = val
+                success(f"Base URL alterada para: {val}")
+
+        elif sub.upper() == "B":
+            from src.config import API_CONFIG
+            val = input(f"  Bearer Token [****]: ").strip()
+            if val:
+                API_CONFIG["bearer_token"] = val
+                success("Bearer Token atualizado.")
+
+        elif sub.upper() == "C":
+            from src.config import API_CONFIG
+            val = input(f"  Tenant ID [{API_CONFIG['tenant_id']}]: ").strip()
+            if val:
+                API_CONFIG["tenant_id"] = val
+                success(f"Tenant ID alterado para: {val}")
+
+        elif sub.upper() == "D":
+            from src.config import API_CONFIG
+            val = input(f"  Banco x-erp-database [{API_CONFIG['erp_database']}]: ").strip()
+            if val:
+                API_CONFIG["erp_database"] = val
+                success(f"Banco API alterado para: {val}")
+
+        elif sub.upper() == "E":
+            from src.config import API_CONFIG
+            if not API_CONFIG["bearer_token"]:
+                warn("Bearer Token nao configurado. Configure primeiro (opcao B).")
+            else:
+                spin("Testando API...", 0.6)
+                ok_status, msg = _test_api_connection()
+                if ok_status:
+                    ok()
+                    success(msg)
+                else:
+                    fail()
+                    error(msg)
 
         else:
             print(f"\n  {C['red']}Opcao invalida!{C['reset']}\n")
@@ -1658,11 +2394,219 @@ def run_batch_organizational(choice):
         info("  - Credenciais corretas?")
 
 
+def wizard_sanitation():
+    B = C["bold"]; D = C["dim"]; R = C["reset"]; G = C["green"]; Y = C["yellow"]; CY = C["cyan"]; RD = C["red"]
+
+    wizard_box("WIZARD — Saneamento de Privilegios", "Consulta APIs oficiais do Protheus Framework")
+
+    from src.config import API_CONFIG
+    if not API_CONFIG["bearer_token"]:
+        warn("Token JWT nao configurado. Configure na opcao 4 (Parametrizacao).")
+        return
+
+    while True:
+        wizard_box("WIZARD — Saneamento de Privilegios")
+        wizard_step(1, 2, "Confirmar consulta")
+        info("Serao consultados 6 endpoints de saneamento do Protheus:")
+        info("  - Totais de inconsistencias")
+        info("  - Menus com privilegios")
+        info("  - Usuarios sem privilegios")
+        info("  - Usuarios com privilegios exclusivos")
+        info("  - Usuarios com privilegios por perfil")
+        print()
+        result = wizard_prompt_yn("Executar consulta de saneamento?", "S")
+        if result is None:
+            info("Wizard cancelado.")
+            return
+        if result:
+            break
+        info("Operacao cancelada.")
+        return
+
+    cls()
+    print(BANNER)
+    section("SANITATION API")
+
+    try:
+        from src.sanitation_report import fetch_sanitation_data, generate_sanitation_html, print_sanitation_summary
+
+        spin_text("Consultando endpoints de saneamento...", "")
+        data = fetch_sanitation_data()
+        ok("Consulta concluida!")
+
+        has_error = any(d.get("_error") for d in data.values() if isinstance(d, dict))
+        if has_error:
+            warn("Alguns endpoints retornaram erro. O appserver pode estar offline ou o token expirado.")
+
+        print_sanitation_summary(data)
+
+        section("HTML")
+        spin("Gerando dashboard HTML...", 0.6)
+        html_path = generate_sanitation_html(data)
+        ok()
+        success(f"Dashboard de saneamento salvo em: {B}{html_path}{R}")
+        info(f"Abra o arquivo no navegador para visualizar.")
+
+        if not has_error:
+            import webbrowser
+            webbrowser.open(f"file://{os.path.abspath(html_path)}")
+
+    except Exception as e:
+        fail(str(e))
+        warn("Verifique se o appserver esta rodando e o token JWT e valido.")
+
+
+def wizard_validation():
+    B = C["bold"]; D = C["dim"]; R = C["reset"]; G = C["green"]; Y = C["yellow"]; CY = C["cyan"]; RD = C["red"]
+
+    wizard_box("WIZARD — Validacao Cruzada", "Compara dados SQL Server vs API REST do Protheus")
+
+    from src.config import API_CONFIG
+    if not API_CONFIG["bearer_token"]:
+        warn("Token JWT nao configurado. Configure na opcao 4 (Parametrizacao).")
+        return
+
+    login = "usr001"
+    while True:
+        wizard_box("WIZARD — Validacao Cruzada")
+        wizard_step(1, 3, "Qual usuario validar?")
+        info("Digite o login do usuario ou ENTER para validar TODOS.")
+        print()
+        val = input(f"  {B}Usuario{R} [{D}{login} | ENTER = TODOS | X = cancelar{R}]: ").strip()
+        if val.upper() == "X":
+            info("Wizard cancelado.")
+            return
+        break
+
+    cls()
+    print(BANNER)
+
+    section("CONEXAO")
+    spin("Conectando ao banco MSSQL...", 0.6)
+    try:
+        from src.database import get_connection
+        with get_connection() as conn:
+            ok("Conectado com sucesso!")
+
+            from src.discovery import discover_columns_for_tables, print_schema_summary
+            from src.user_mapper import UserMapper
+            from src.api_validator import APIValidator, generate_validation_html
+
+            section("DISCOVERY")
+            spin("Descobrindo estrutura das tabelas...", 1.0)
+            schema = discover_columns_for_tables(SCHEMA_TABLES, conn)
+            ok()
+            print_schema_summary(schema)
+
+            mapper = UserMapper(schema, conn)
+
+            section("USUARIOS SQL")
+            if val:
+                sql_users = [mapper.find_user(val)] if mapper.find_user(val) else []
+            else:
+                sql_users = mapper.list_non_blocked_users()
+            ok(f"{len(sql_users)} usuarios encontrados via SQL")
+
+            section("API")
+            spin_text("Testando conexao com API...", "")
+            api_ok, api_msg = _test_api_connection()
+            ok(f"API: {api_msg}")
+            if not api_ok:
+                warn("Validacao parcial — API indisponivel.")
+                return
+
+            section("VALIDACAO")
+            info("Comparando usuarios SQL vs API...")
+            validator = APIValidator(mapper, schema)
+            report = validator.run_full_validation(sql_users)
+
+            json_path = validator.save_report()
+            ok(f"Relatorio JSON: {json_path}")
+
+            section("HTML")
+            spin("Gerando dashboard HTML...", 0.6)
+            html_path = generate_validation_html(report)
+            ok()
+            success(f"Dashboard de validacao salvo em: {B}{html_path}{R}")
+
+            total = report["summary"]["total_divergences"]
+            if total == 0:
+                success("Nenhuma divergencia encontrada entre SQL e API!")
+            else:
+                warn(f"{total} divergencias encontradas. Verifique o dashboard.")
+
+            import webbrowser
+            webbrowser.open(f"file://{os.path.abspath(html_path)}")
+
+    except Exception as e:
+        fail(str(e))
+
+
+def _test_api_connection():
+    try:
+        from src.protheus_api import create_api
+        api = create_api()
+        return api.test_connection()
+    except Exception as e:
+        return False, str(e)
+
+
+def menu_validacao_api():
+    B = C["bold"]; D = C["dim"]; W = C["white"]; RD = C["red"]; R = C["reset"]
+    while True:
+        cls()
+        print(BANNER)
+        from src.database import is_offline
+        if is_offline():
+            show_offline_banner()
+        L = C["cyan"]
+        BOX = 52
+        def row(text):
+            import re
+            v = re.sub(r"\033\[[0-9;]*m", "", text)
+            pad = BOX - len(v)
+            return f"  {text}{' ' * pad}{L}║{R}"
+
+        from src.config import API_CONFIG
+        api_status = f"{C['green']}CONFIGURADO{R}" if API_CONFIG["bearer_token"] else f"{C['red']}NAO CONFIGURADO{R}"
+
+        print(f"  {L}╔{'═' * BOX}╗{R}")
+        print(row(f"{L}║{R}  {B}VALIDACAO API (Protheus Framework){R}"))
+        print(row(f"{L}║{R}  {D}{'─' * (BOX - 3)}{R}"))
+        print(row(f"{L}║{R}  {B}1{R} │ {W}Saneamento de Privilegios{R}"))
+        print(row(f"{L}║{R}    │ {D}Consultar APIs de saneamento do framework{R}"))
+        print(row(f"{L}║{R}  {B}2{R} │ {W}Validacao Cruzada SQL vs API{R}"))
+        print(row(f"{L}║{R}    │ {D}Comparar dados do banco com a API oficial{R}"))
+        print(row(f"{L}║{R}  {B}3{R} │ {W}Testar Conexao API{R}"))
+        print(row(f"{L}║{R}    │ {D}Verificar se o appserver responde{R}"))
+        print(row(f"{L}║{R}  {D}{'─' * (BOX - 3)}{R}"))
+        print(row(f"{L}║{R}  {D}  Status: {api_status}{R}"))
+        print(row(f"{L}║{R}  {B}0{R} │ {RD}Voltar{R}"))
+        print(f"  {L}╚{'═' * BOX}╝{R}")
+        print()
+        sub = input(f"  {B}Opcao:{R} ").strip()
+        cls()
+        if sub == "0":
+            break
+        elif sub == "1":
+            wizard_sanitation()
+        elif sub == "2":
+            wizard_validation()
+        elif sub == "3":
+            ok_status, msg = _test_api_connection()
+            if ok_status:
+                success(msg)
+            else:
+                error(msg)
+            wait_enter()
+        else:
+            print(f"\n  {C['red']}Opcao invalida!{C['reset']}\n")
+
+
 def main():
-    report = None
-    schema = None
     current_login = "usr001"
     first_run = True
+    is_org = (cfg.PRIVILEGE_MODE == "organizational_layer")
 
     while True:
         if not first_run:
@@ -1682,42 +2626,23 @@ def main():
             print(f"\n  {C['yellow']}Saindo...{C['reset']}\n")
             break
 
-        elif choice in ("1", "2", "3"):
-            if choice in ("2", "3") and cfg.PRIVILEGE_MODE == "organizational_layer":
-                if choice == "2":
-                    run_organizational_analysis()
-                elif choice == "3":
-                    run_generate_org_sql()
-                continue
+        elif choice == "1":
+            current_login = wizard_mapeamento(current_login)
 
-            login_input = input(f"  {C['bold']}Usuario{C['reset']} [{C['dim']}{current_login} | ENTER = TODOS{C['reset']}]: ").strip()
-            if login_input:
-                current_login = login_input
+        elif choice == "2":
+            wizard_ferramentas()
 
-                if choice == "1":
-                    report, schema, current_login = run_mapping(current_login)
-                elif choice == "2":
-                    report, schema, current_login = run_mapping(current_login)
-                    if report:
-                        run_generate_privileges(report, schema, current_login)
-                elif choice == "3":
-                    report, schema, current_login = run_mapping(current_login)
-                    if report:
-                        run_dashboard(current_login)
+        elif choice == "3":
+            if is_org:
+                menu_camadas_org()
             else:
-                run_batch(choice)
+                print(f"\n  {C['red']}Opcao invalida!{C['reset']}\n")
 
         elif choice == "4":
             menu_parametrizacao()
 
         elif choice == "5":
-            run_export()
-
-        elif choice == "6":
-            run_import()
-
-        elif choice == "9":
-            wizard_organizacional()
+            menu_validacao_api()
 
         else:
             print(f"\n  {C['red']}Opcao invalida!{C['reset']}\n")

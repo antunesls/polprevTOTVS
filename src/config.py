@@ -17,6 +17,20 @@ LLM_API_KEY = ""
 LLM_BASE_URL = "https://openrouter.ai/api/v1"
 LLM_MODEL = "openai/gpt-4o-mini"
 
+API_CONFIG = {
+    "enabled": False,
+    "base_url": "https://localhost:1234/app-root",
+    "auth_url": "",
+    "api_username": "",
+    "api_password": "",
+    "bearer_token": "",
+    "tenant_id": "",
+    "erp_database": "",
+    "erp_module": "CFG",
+    "verify_ssl": False,
+    "timeout": 30,
+}
+
 DATA_MODE = "live"
 
 OUTPUT_DIR = "output"
@@ -53,6 +67,9 @@ def load_user_config():
         globals()["LLM_API_KEY"] = user_cfg.get("llm_api_key", "")
         globals()["LLM_BASE_URL"] = user_cfg.get("llm_base_url", "https://openrouter.ai/api/v1")
         globals()["LLM_MODEL"] = user_cfg.get("llm_model", "openai/gpt-4o-mini")
+        api_cfg = user_cfg.get("api", {})
+        if api_cfg:
+            API_CONFIG.update(api_cfg)
     except Exception:
         pass
 
@@ -65,6 +82,19 @@ def save_user_config():
         "llm_api_key": LLM_API_KEY,
         "llm_base_url": LLM_BASE_URL,
         "llm_model": LLM_MODEL,
+        "api": {
+            "enabled": API_CONFIG["enabled"],
+            "base_url": API_CONFIG["base_url"],
+            "auth_url": API_CONFIG["auth_url"],
+            "api_username": API_CONFIG["api_username"],
+            "api_password": API_CONFIG["api_password"],
+            "bearer_token": API_CONFIG["bearer_token"],
+            "tenant_id": API_CONFIG["tenant_id"],
+            "erp_database": API_CONFIG["erp_database"],
+            "erp_module": API_CONFIG["erp_module"],
+            "verify_ssl": API_CONFIG["verify_ssl"],
+            "timeout": API_CONFIG["timeout"],
+        },
     }
     with open(CONFIG_USER_PATH, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
