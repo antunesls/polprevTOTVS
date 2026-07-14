@@ -32,6 +32,8 @@ class UserMapper:
         login_col = self.resolve_col("SYS_USR", login_candidates)
         depto_candidates = ["USR_DEPTO", "USR_DEPT", "DEPTO", "DEPARTMENT"]
         depto_col = self.resolve_col("SYS_USR", depto_candidates)
+        name_candidates = ["USR_NOME", "USR_NAME", "NOME", "NAME", "USR_FULLNAME"]
+        name_col = self.resolve_col("SYS_USR", name_candidates)
 
         if not pk or not login_col:
             print("  \033[93m[!]\033[0m Nao foi possivel identificar colunas em SYS_USR")
@@ -40,6 +42,8 @@ class UserMapper:
         select_cols = [pk, login_col]
         if depto_col:
             select_cols.append(depto_col)
+        if name_col:
+            select_cols.append(name_col)
 
         rows = fetch_dicts(self.conn,
             f"SELECT {', '.join(select_cols)} FROM SYS_USR WHERE {login_col} = ?",
@@ -50,8 +54,15 @@ class UserMapper:
 
         user = rows[0]
         depto_info = f" (Depto: {user[depto_col].strip()})" if depto_col and user.get(depto_col) and user[depto_col].strip() else ""
-        print(f"  \033[92m[OK]\033[0m Usuario: \033[1m{user[login_col].strip()}\033[0m (ID: {user[pk]}){depto_info}")
-        return {"id": user[pk], "login": user[login_col], "pk_col": pk, "depto": user.get(depto_col, "").strip() if depto_col else ""}
+        name_info = f" - {user[name_col].strip()}" if name_col and user.get(name_col) and user[name_col].strip() else ""
+        print(f"  \033[92m[OK]\033[0m Usuario{name_info}: \033[1m{user[login_col].strip()}\033[0m (ID: {user[pk]}){depto_info}")
+        return {
+            "id": user[pk],
+            "login": user[login_col],
+            "pk_col": pk,
+            "depto": user.get(depto_col, "").strip() if depto_col else "",
+            "name": user.get(name_col, "").strip() if name_col else "",
+        }
 
     def list_non_blocked_users(self):
         pk_candidates = ["USR_ID", "ID"]
@@ -63,6 +74,8 @@ class UserMapper:
         del_col = self.resolve_col("SYS_USR", ["D_E_L_E_T_"])
         depto_candidates = ["USR_DEPTO", "USR_DEPT", "DEPTO", "DEPARTMENT"]
         depto_col = self.resolve_col("SYS_USR", depto_candidates)
+        name_candidates = ["USR_NOME", "USR_NAME", "NOME", "NAME", "USR_FULLNAME"]
+        name_col = self.resolve_col("SYS_USR", name_candidates)
 
         if not pk or not login_col:
             print("  \033[93m[!]\033[0m Nao foi possivel identificar colunas em SYS_USR")
@@ -71,6 +84,8 @@ class UserMapper:
         select_cols = [pk, login_col]
         if depto_col:
             select_cols.append(depto_col)
+        if name_col:
+            select_cols.append(name_col)
 
         where = "1=1"
         params = []
@@ -87,9 +102,14 @@ class UserMapper:
             f"SELECT {', '.join(select_cols)} FROM SYS_USR WHERE {where}",
             params)
 
-        users = [{"id": row[pk], "login": row[login_col].strip() if row[login_col] else "",
-                  "depto": row[depto_col].strip() if depto_col and row.get(depto_col) else ""}
-                 for row in rows]
+        users = []
+        for row in rows:
+            users.append({
+                "id": row[pk],
+                "login": row[login_col].strip() if row[login_col] else "",
+                "depto": row[depto_col].strip() if depto_col and row.get(depto_col) else "",
+                "name": row[name_col].strip() if name_col and row.get(name_col) else "",
+            })
 
         print(f"  \033[92m[OK]\033[0m Usuarios nao bloqueados encontrados: \033[1m{len(users)}\033[0m")
         return users
@@ -667,10 +687,35 @@ class UserMapper:
                     "acbrowse_status": acbrowse_status,
                 })
 
+        for func, features in all_privileges.items():
+            if func not in seen:
+                seen.add(func)
+                translated_features = {}
+                for feat, info in features.items():
+                    translated_features[feat] = {
+                        "access": translate_access(info["access"]),
+                        "access_raw": info["access"],
+                        "rule_name": info["rule_name"],
+                        "menu_oper": info.get("menu_oper"),
+                        "menu_def": info.get("menu_def", ""),
+                    }
+                routines_flat.append({
+                    "routine": func,
+                    "description": "",
+                    "menu_name": "",
+                    "module": "",
+                    "features": translated_features,
+                    "has_explicit_privilege": True,
+                    "browse_permissions": [],
+                    "disabled_by_acbrowse": False,
+                    "acbrowse_status": None,
+                })
+
         report = {
             "user": login,
             "user_id": user["id"],
             "user_depto": user.get("depto", ""),
+            "user_name": user.get("name", ""),
             "total_menus": len(menu_tree),
             "total_routines": len(routines_flat),
             "groups": groups,

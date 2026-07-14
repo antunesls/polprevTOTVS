@@ -4,6 +4,7 @@ import sys
 import os
 import time
 import threading
+import json
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -14,6 +15,7 @@ import src.config as cfg
 from src.user_mapper import UserMapper
 from src.privilege_generator import PrivilegeGenerator, save_report_json
 from src.dashboard import generate_html
+from src.tier3 import build_department_analysis, build_equivalent_profile_groups, build_tier4_users, load_existing_rules, normalize_tier3_sets, routine_permissions, user_routine_items
 
 
 C = {
@@ -158,7 +160,7 @@ def menu():
     from src.database import is_offline
     if is_offline():
         show_offline_banner()
-    L = C["cyan"]; R = C["reset"]; B = C["bold"]; D = C["dim"]; W = C["white"]; RD = C["red"]
+    L = C["cyan"]; R = C["reset"]; B = C["bold"]; D = C["dim"]; W = C["white"]; RD = C["red"]; G = C["green"]
     BOX = 52
     def row(text):
         import re
@@ -166,22 +168,38 @@ def menu():
         pad = BOX - len(v)
         return f"  {text}{' ' * pad}{L}║{R}"
 
+    is_org = (cfg.PRIVILEGE_MODE == "organizational_layer")
+
     print(f"  {L}╔{'═' * BOX}╗{R}")
-    print(row(f"{L}║{R}  {B}1{R} │ {W}Apenas mapear acessos do usuario{R}"))
+    print(row(f"{L}║{R}  {B}1{R} │ {W}Mapear acessos do usuario{R}"))
     print(row(f"{L}║{R}    │ {D}Relatorio JSON com rotinas e permissoes{R}"))
-    print(row(f"{L}║{R}  {B}2{R} │ {W}Mapear + Gerar grupo de privilegios{R}"))
-    print(row(f"{L}║{R}    │ {D}Relatorio JSON + Script SQL p/ SYS_RULES{R}"))
-    print(row(f"{L}║{R}  {B}3{R} │ {W}Mapear + Gerar dashboard HTML{R}"))
-    print(row(f"{L}║{R}    │ {D}Relatorio JSON + Dashboard grafico{R}"))
+
+    if is_org:
+        print(row(f"{L}║{R}  {B}2{R} │ {W}Analisar camadas organizacionais{R}"))
+        print(row(f"{L}║{R}    │ {D}Mapeia TODOS → LLM sugere conjuntos → Dashboard 4 tiers{R}"))
+        print(row(f"{L}║{R}  {B}3{R} │ {W}Gerar SQL organizacional{R}"))
+        print(row(f"{L}║{R}    │ {D}Carrega JSON ajustado → Script INSERTs SYS_RULES{R}"))
+    else:
+        print(row(f"{L}║{R}  {B}2{R} │ {W}Mapear + Gerar grupo de privilegios{R}"))
+        print(row(f"{L}║{R}    │ {D}Relatorio JSON + Script SQL p/ SYS_RULES{R}"))
+        print(row(f"{L}║{R}  {B}3{R} │ {W}Mapear + Gerar dashboard HTML{R}"))
+        print(row(f"{L}║{R}    │ {D}Relatorio JSON + Dashboard grafico{R}"))
+
     print(row(f"{L}║{R}  {B}4{R} │ {W}Parametrizacao{R}"))
-    print(row(f"{L}║{R}    │ {D}Configurar banco e preferencias{R}"))
+    print(row(f"{L}║{R}    │ {D}Configurar banco, LLM e preferencias{R}"))
+
+    if is_org:
+        print(row(f"{L}║{R}  {D}{'─' * (BOX - 3)}{R}"))
+        print(row(f"{L}║{R}  {D}  Modo: {G}CAMADA ORGANIZACIONAL{R}"))
+        print(row(f"{L}║{R}    │ Empresa: {G}{cfg.EMPRESA_NAME}{R}  |  LLM: {G}{'ON' if cfg.LLM_API_KEY else 'OFF'}{R}"))
+
     print(row(f"{L}║{R}  {B}5{R} │ {W}Exportar dados (SQL){R}"))
     print(row(f"{L}║{R}    │ {D}Gerar query para extracao offline{R}"))
     print(row(f"{L}║{R}  {B}6{R} │ {W}Importar dados (JSON){R}"))
     print(row(f"{L}║{R}    │ {D}Carregar export.json p/ modo offline{R}"))
-    if cfg.LLM_API_KEY and cfg.PRIVILEGE_MODE == "organizational_layer":
-        print(row(f"{L}║{R}  {B}7{R} │ {W}Pre-visualizar LLM{R}"))
-        print(row(f"{L}║{R}    │ {D}Analisar clusters antes de gerar{R}"))
+    if is_org:
+        print(row(f"{L}║{R}  {B}9{R} │ {W}Wizard Organizacional{R}"))
+        print(row(f"{L}║{R}    │ {D}Configurar modo por camada (passo a passo){R}"))
     print(row(f"{L}║{R}  {B}0{R} │ {RD}Sair{R}"))
     print(f"  {L}╚{'═' * BOX}╝{R}")
     print()
@@ -428,11 +446,11 @@ def menu_parametrizacao():
         print(row(f"{L}║{R}  {B}5{R} │ {W}Driver ODBC .......{R} [{D}{driver_disp}{R}]"))
         if cfg.PRIVILEGE_MODE == "organizational_layer":
             print(row(f"{L}║{R}  {D}{'─' * (BOX - 3)}{R}"))
-            print(row(f"{L}║{R}  {B}5{N}{R} │ {W}Nome da empresa ...{R} [{D}{empresa_disp}{R}]"))
+            print(row(f"{L}║{R}  {B}5{{N}}{R} │ {W}Nome da empresa ...{R} [{D}{empresa_disp}{R}]"))
             print(row(f"{L}║{R}  {D}{'─' * (BOX - 3)}{R}"))
-            print(row(f"{L}║{R}  {B}5{A}{R} │ {W}LLM API Key .......{R} [{D}{llm_key_disp}{R}]"))
-            print(row(f"{L}║{R}  {B}5{B}{R} │ {W}LLM Model .........{R} [{D}{llm_model_disp}{R}]"))
-            print(row(f"{L}║{R}  {B}5{C}{R} │ {W}LLM Base URL ......{R} [{D}{llm_url_disp}{R}]"))
+            print(row(f"{L}║{R}  {B}5{{A}}{R} │ {W}LLM API Key .......{R} [{D}{llm_key_disp}{R}]"))
+            print(row(f"{L}║{R}  {B}5{{B}}{R} │ {W}LLM Model .........{R} [{D}{llm_model_disp}{R}]"))
+            print(row(f"{L}║{R}  {B}5{{C}}{R} │ {W}LLM Base URL ......{R} [{D}{llm_url_disp}{R}]"))
         print(row(f"{L}║{R}  {D}{'─' * (BOX - 3)}{R}"))
         print(row(f"{L}║{R}  {B}6{R} │ {W}Modo de privilegio{R} [{G}{mode_disp}{R}]"))
         print(row(f"{L}║{R}  {D}{'─' * (BOX - 3)}{R}"))
@@ -538,6 +556,323 @@ def menu_parametrizacao():
             wait_enter()
 
 
+def wizard_organizacional():
+    cls()
+    print(BANNER)
+    L = C["cyan"]; R = C["reset"]; B = C["bold"]; D = C["dim"]
+    W = C["white"]; G = C["green"]; Y = C["yellow"]; RD = C["red"]; CY = C["cyan"]
+
+    print(f"  {CY}{chr(0x2550) * 56}{R}")
+    print(f"  {CY}  {B}WIZARD — Modo Organizacional{R}")
+    print(f"  {CY}  {D}Configure privilegios por camada (passo a passo){R}")
+    print(f"  {CY}{chr(0x2550) * 56}{R}")
+    print()
+    info("Este wizard vai configurar:")
+    info("  1. Nome da empresa (obrigatorio)")
+    info("  2. Metodo de agrupamento (LLM ou Jaccard)")
+    info("  3. Parametros do metodo escolhido")
+    print()
+    info(f"{D}A qualquer momento digite 'X' para cancelar.{R}")
+    wait_enter()
+
+    # etapa 1: nome da empresa
+    while True:
+        cls()
+        print(BANNER)
+        print(f"  {CY}{chr(0x2550) * 56}{R}")
+        print(f"  {CY}  {B}ETAPA 1/4 — Nome da Empresa{R}")
+        print(f"  {CY}{chr(0x2550) * 56}{R}")
+        print()
+        info("Identificador usado nos nomes das regras (ex: P_POLPREV).")
+        info("Use um nome curto, sem espacos ou caracteres especiais.")
+        print()
+
+        current = cfg.EMPRESA_NAME if cfg.EMPRESA_NAME else ""
+        prompt = f"  {B}Nome da empresa{R}"
+        if current:
+            prompt += f" [{G}{current}{R}]"
+        prompt += ": "
+
+        val = input(prompt).strip()
+        if val.upper() == "X":
+            info("Wizard cancelado.")
+            return
+        if val:
+            cfg.EMPRESA_NAME = val.upper().replace(" ", "_")
+        elif not cfg.EMPRESA_NAME:
+            error("Nome da empresa e obrigatorio.")
+            wait_enter()
+            continue
+
+        success(f"Empresa: {G}{cfg.EMPRESA_NAME}{R}")
+        wait_enter()
+        break
+
+    # etapa 2: metodo de agrupamento
+    clustering_method = "llm" if cfg.LLM_API_KEY else "jaccard"
+    while True:
+        cls()
+        print(BANNER)
+        print(f"  {CY}{chr(0x2550) * 56}{R}")
+        print(f"  {CY}  {B}ETAPA 2/4 — Metodo de Agrupamento{R}")
+        print(f"  {CY}{chr(0x2550) * 56}{R}")
+        print()
+        info("Como agrupar usuarios com rotinas similares?")
+        print()
+        print(f"  {B}[L]{R} {W}LLM (OpenRouter){R}")
+        print(f"     {D}IA analisa dominios funcionais e sugere conjuntos de rotinas.{R}")
+        print(f"     {D}Requer API Key gratuita do OpenRouter.{R}")
+        print()
+        print(f"  {B}[J]{R} {W}Jaccard (Manual){R}")
+        print(f"     {D}Algoritmo de similaridade entre conjuntos de rotinas.{R}")
+        print(f"     {D}Nao requer API externa, funciona offline.{R}")
+        print()
+
+        current_method = "LLM" if cfg.LLM_API_KEY else "Jaccard"
+        val = input(f"  {B}Metodo{R} [{G}{current_method}{R} | X = cancelar]: ").strip().upper()
+
+        if val == "X":
+            info("Wizard cancelado.")
+            return
+        if val == "L":
+            clustering_method = "llm"
+            break
+        if val == "J":
+            clustering_method = "jaccard"
+            break
+        if not val:
+            break
+
+    # etapa 3: parametros do metodo
+    if clustering_method == "llm":
+        while True:
+            cls()
+            print(BANNER)
+            print(f"  {CY}{chr(0x2550) * 56}{R}")
+            print(f"  {CY}  {B}ETAPA 3/4 — LLM API Key{R}")
+            print(f"  {CY}{chr(0x2550) * 56}{R}")
+            print()
+            info("Chave de API do OpenRouter (gratuita).")
+            info(f"Obtenha em: {D}https://openrouter.ai/keys{R}")
+            print()
+
+            current_disp = "****" if cfg.LLM_API_KEY else "(vazio)"
+            val = input(f"  {B}API Key{R} [{D}{current_disp}{R} | X = cancelar]: ").strip()
+
+            if val.upper() == "X":
+                info("Wizard cancelado.")
+                return
+            if val:
+                cfg.LLM_API_KEY = val
+                success("API Key configurada.")
+            elif not cfg.LLM_API_KEY:
+                error("API Key e obrigatoria para o metodo LLM.")
+                wait_enter()
+                continue
+
+            wait_enter()
+            break
+
+        cls()
+        print(BANNER)
+        print(f"  {CY}{chr(0x2550) * 56}{R}")
+        print(f"  {CY}  {B}ETAPA 4/4 — LLM Model e URL{R}")
+        print(f"  {CY}{chr(0x2550) * 56}{R}")
+        print()
+        info("Modelo LLM para analise de conjuntos funcionais.")
+        info(f"{D}Recomendado: openai/gpt-4o-mini (custo baixo){R}")
+        print()
+
+        val = input(f"  {B}Modelo{R} [{G}{cfg.LLM_MODEL}{R} | ENTER = manter | X = cancelar]: ").strip()
+        if val.upper() == "X":
+            info("Wizard cancelado.")
+            return
+        if val:
+            cfg.LLM_MODEL = val
+
+        print()
+        val = input(f"  {B}Base URL{R} [{D}{cfg.LLM_BASE_URL}{R} | ENTER = manter]: ").strip()
+        if val.upper() == "X":
+            info("Wizard cancelado.")
+            return
+        if val:
+            cfg.LLM_BASE_URL = val
+
+        wait_enter()
+
+    else:
+        import src.organizational_privileges as org_priv
+
+        while True:
+            cls()
+            print(BANNER)
+            print(f"  {CY}{chr(0x2550) * 56}{R}")
+            print(f"  {CY}  {B}ETAPA 3/4 — Threshold de Similaridade{R}")
+            print(f"  {CY}{chr(0x2550) * 56}{R}")
+            print()
+            info("Limiar de similaridade Jaccard para formar conjuntos no modo manual.")
+            info(f"{D}0.0 = tudo agrupado | 1.0 = nada agrupado{R}")
+            info(f"{D}Recomendado: 0.4 (agrupamento moderado){R}")
+            print()
+
+            current = str(org_priv.CLUSTER_SIMILARITY_THRESHOLD)
+            val = input(f"  {B}Threshold{R} [{G}{current}{R} | ENTER = manter | X = cancelar]: ").strip()
+
+            if val.upper() == "X":
+                info("Wizard cancelado.")
+                return
+            if val:
+                try:
+                    t = float(val)
+                    if 0.0 <= t <= 1.0:
+                        org_priv.CLUSTER_SIMILARITY_THRESHOLD = t
+                        success(f"Threshold: {G}{t}{R}")
+                        break
+                    else:
+                        error("Valor deve estar entre 0.0 e 1.0.")
+                        wait_enter()
+                except ValueError:
+                    error("Valor invalido. Use um numero (ex: 0.4).")
+                    wait_enter()
+            else:
+                break
+
+        cls()
+        print(BANNER)
+        print(f"  {CY}{chr(0x2550) * 56}{R}")
+        print(f"  {CY}  {B}ETAPA 4/4 — Tamanho Minimo do Conjunto Manual{R}")
+        print(f"  {CY}{chr(0x2550) * 56}{R}")
+        print()
+        info("Numero minimo de usuarios para formar um conjunto no modo manual.")
+        info(f"{D}Recomendado: 2{R}")
+        print()
+
+        current = str(org_priv.MIN_CLUSTER_SIZE)
+        val = input(f"  {B}Tamanho minimo{R} [{G}{current}{R} | ENTER = manter | X = cancelar]: ").strip()
+
+        if val.upper() == "X":
+            info("Wizard cancelado.")
+            return
+        if val:
+            try:
+                s = int(val)
+                if s >= 1:
+                    org_priv.MIN_CLUSTER_SIZE = s
+                    success(f"Tamanho minimo: {G}{s}{R}")
+                else:
+                    error("Valor deve ser maior ou igual a 1.")
+            except ValueError:
+                error("Valor invalido. Use um numero inteiro (ex: 2).")
+
+        wait_enter()
+
+    # etapa final: confirmacao
+    while True:
+        cls()
+        print(BANNER)
+        print(f"  {CY}{chr(0x2550) * 56}{R}")
+        print(f"  {CY}  {B}CONFIRMACAO{R}")
+        print(f"  {CY}{chr(0x2550) * 56}{R}")
+        print()
+
+        method_disp = "LLM (OpenRouter)" if clustering_method == "llm" else "Jaccard (Manual)"
+        key_disp = "****" if cfg.LLM_API_KEY else "(nao definido)"
+
+        import src.organizational_privileges as org_priv
+
+        print(f"  {B}Empresa.......:{R} {G}{cfg.EMPRESA_NAME}{R}")
+        print(f"  {B}Modo..........:{R} {G}POR CAMADA ORGANIZACIONAL{R}")
+        print(f"  {B}Agrupamento...:{R} {G}{method_disp}{R}")
+        if clustering_method == "llm":
+            print(f"  {B}LLM API Key...:{R} {D}{key_disp}{R}")
+            print(f"  {B}LLM Model.....:{R} {D}{cfg.LLM_MODEL}{R}")
+            print(f"  {B}LLM Base URL..:{R} {D}{cfg.LLM_BASE_URL}{R}")
+        else:
+            print(f"  {B}Threshold.....:{R} {D}{org_priv.CLUSTER_SIMILARITY_THRESHOLD}{R}")
+            print(f"  {B}Tam. minimo...:{R} {D}{org_priv.MIN_CLUSTER_SIZE}{R}")
+        print()
+        print(f"  {CY}{chr(0x2500) * 56}{R}")
+        print()
+        print(f"  {B}[S]{R} Salvar e ativar  {D}[E]{R} Editar etapa  {D}[X]{R} Cancelar")
+        action = input(f"  {B}Opcao:{R} ").strip().upper()
+
+        if action == "X":
+            info("Wizard cancelado. Nada foi salvo.")
+            return
+
+        if action == "S":
+            cfg.PRIVILEGE_MODE = "organizational_layer"
+            save_user_config()
+            print()
+            success("Configuracao salva com sucesso!")
+            success(f"Modo ativo: {G}POR CAMADA ORGANIZACIONAL{R}")
+            print()
+            info("Proximos passos:")
+            info("  - Opcao 2: Gerar script de privilegios organizacional")
+            if cfg.LLM_API_KEY:
+                info("  - Opcao 7: Pre-visualizar conjuntos funcionais via LLM")
+            return
+
+        if action == "E":
+            print()
+            print(f"  {B}Editar:{R}")
+            print(f"  {D}[1]{R} Nome da empresa")
+            print(f"  {D}[2]{R} Metodo de agrupamento")
+            if clustering_method == "llm":
+                print(f"  {D}[A]{R} LLM API Key")
+                print(f"  {D}[M]{R} LLM Model / URL")
+            else:
+                print(f"  {D}[T]{R} Threshold")
+                print(f"  {D}[N]{R} Tamanho minimo")
+            step = input(f"  {B}Etapa:{R} ").strip().upper()
+
+            if step == "1":
+                val = input(f"  {B}Nome da empresa{R} [{G}{cfg.EMPRESA_NAME}{R}]: ").strip()
+                if val:
+                    cfg.EMPRESA_NAME = val.upper().replace(" ", "_")
+                    success(f"Empresa: {cfg.EMPRESA_NAME}")
+
+            elif step == "2":
+                print(f"  {B}[L]{R} LLM  {D}[J]{R} Jaccard")
+                val = input(f"  {B}Metodo{R} [{G}{'LLM' if clustering_method == 'llm' else 'Jaccard'}{R}]: ").strip().upper()
+                if val == "L":
+                    clustering_method = "llm"
+                elif val == "J":
+                    clustering_method = "jaccard"
+
+            elif step == "A" and clustering_method == "llm":
+                val = input(f"  {B}LLM API Key{R} [****]: ").strip()
+                if val:
+                    cfg.LLM_API_KEY = val
+                    success("API Key atualizada.")
+
+            elif step == "M" and clustering_method == "llm":
+                val = input(f"  {B}LLM Model{R} [{cfg.LLM_MODEL}]: ").strip()
+                if val:
+                    cfg.LLM_MODEL = val
+                val = input(f"  {B}LLM Base URL{R} [{cfg.LLM_BASE_URL}]: ").strip()
+                if val:
+                    cfg.LLM_BASE_URL = val
+
+            elif step == "T" and clustering_method == "jaccard":
+                val = input(f"  {B}Threshold{R} [{org_priv.CLUSTER_SIMILARITY_THRESHOLD}]: ").strip()
+                if val:
+                    try:
+                        org_priv.CLUSTER_SIMILARITY_THRESHOLD = float(val)
+                    except ValueError:
+                        pass
+
+            elif step == "N" and clustering_method == "jaccard":
+                val = input(f"  {B}Tamanho minimo{R} [{org_priv.MIN_CLUSTER_SIZE}]: ").strip()
+                if val:
+                    try:
+                        org_priv.MIN_CLUSTER_SIZE = int(val)
+                    except ValueError:
+                        pass
+
+            wait_enter()
+
+
 _saved_llm_clusters = None
 
 
@@ -603,6 +938,25 @@ def run_llm_preview():
                 warn("Nenhum relatorio gerado. Abortando.")
                 return
 
+            zero_routine_users = []
+            filtered_reports = []
+            for rep in all_reports:
+                routines_count = len(rep.get("routines_summary", []))
+                if routines_count == 0:
+                    zero_routine_users.append(rep["user"])
+                else:
+                    filtered_reports.append(rep)
+
+            if zero_routine_users:
+                print(f"  {C['yellow']}[FILTRO]{C['reset']} {len(zero_routine_users)} usuarios sem rotinas ignorados:")
+                print(f"         {', '.join(zero_routine_users[:10])}{'...' if len(zero_routine_users) > 10 else ''}")
+
+            if not filtered_reports:
+                warn("Nenhum usuario com rotinas encontrado. Abortando.")
+                return
+
+            all_reports = filtered_reports
+
             from src.llm_categorizer import suggest_clusters, build_prompt
 
             users_data = []
@@ -612,10 +966,9 @@ def run_llm_preview():
                     code = r.get("routine", "")
                     desc = r.get("description", "")
                     if code:
-                        routines.append(f"{code} - {desc}" if desc else code)
+                        routines.append({"code": code, "description": desc, "permissions": routine_permissions(r)})
                 users_data.append({
                     "user": rep["user"],
-                    "department": rep.get("user_depto", ""),
                     "routines": routines,
                 })
 
@@ -623,50 +976,578 @@ def run_llm_preview():
             llm_result = suggest_clusters(users_data)
 
             if not llm_result or not llm_result.get("clusters"):
-                warn("LLM nao retornou clusters validos. Use opcao 2 para modo manual (Jaccard).")
+                warn("LLM nao retornou conjuntos funcionais validos. Use opcao 2 para modo manual (Jaccard).")
                 return
 
-            llm_clusters = llm_result.get("clusters", [])
+            llm_clusters = normalize_tier3_sets(llm_result.get("clusters", []), all_reports)
+            clustered_users = set()
+            for c in llm_clusters:
+                clustered_users.update(c.get("users", []))
+            unclustered_list = sorted(set(rep["user"] for rep in all_reports) - clustered_users)
+
+            users_detail = {}
+            user_routines_raw = {}
+            user_dept_map = {}
+            for rep in all_reports:
+                login = rep["user"]
+                top_routines = []
+                for r in rep.get("routines_summary", [])[:20]:
+                    code = r.get("routine", "")
+                    desc = r.get("description", "")
+                    top_routines.append(f"{code} - {desc}" if desc else code)
+                users_detail[login] = {
+                    "name": rep.get("user_name", login),
+                    "login": login,
+                    "depto": rep.get("user_depto", ""),
+                    "total_routines": rep.get("total_routines", 0),
+                    "top_routines": top_routines,
+                    "all_routines": top_routines,
+                }
+                user_routines_raw[login] = user_routine_items(rep)
+                user_dept_map[login] = rep.get("user_depto", "").strip() or "SEM_DEPARTAMENTO"
+
+            html_path = os.path.join(OUTPUT_DIR, f"clusters_{cfg.EMPRESA_NAME}.html")
+            from src.html_report import generate_cluster_html
+            generate_cluster_html(
+                {"routines": [], "total_users": len(all_reports), "empresa": cfg.EMPRESA_NAME},
+                [],
+                llm_clusters,
+                unclustered_list,
+                {"users": []},
+                users_detail,
+                user_routines_raw,
+                user_dept_map,
+                html_path,
+                cfg.EMPRESA_NAME,
+            )
+
+            import webbrowser
+            webbrowser.open(f"file://{os.path.abspath(html_path)}")
+            print(f"\n  {C['green']}HTML gerado:{C['reset']} {html_path}")
+            print(f"  {C['cyan']}O navegador foi aberto para ajuste dos conjuntos funcionais.{C['reset']}")
+            print()
+            print(f"  {C['bold']}No navegador:{C['reset']}")
+            print(f"    - Arraste rotinas para os conjuntos funcionais")
+            print(f"    - Duplo clique no nome do conjunto para renomear")
+            print(f"    - Clique no x da rotina para remove-la do conjunto")
+            print(f"    - Clique em {C['bold']}Salvar JSON{C['reset']} e salve na pasta output/")
+            print(f"    - Renomeie o arquivo para clusters_{cfg.EMPRESA_NAME}.json")
+            print()
+            json_path = os.path.join(OUTPUT_DIR, f"clusters_{cfg.EMPRESA_NAME}.json")
+
+            print(f"  {C['cyan']}╔{'═' * 54}╗{C['reset']}")
+            print(f"  {C['cyan']}║{C['reset']} {C['bold']}[C]{C['reset']} Carregar JSON de {OUTPUT_DIR}/clusters_{cfg.EMPRESA_NAME}.json")
+            print(f"  {C['cyan']}║{C['reset']} {C['bold']}[P]{C['reset']} Colar JSON manualmente (Ctrl+V)")
+            print(f"  {C['cyan']}║{C['reset']} {C['bold']}[V]{C['reset']} Voltar (descartar tudo)")
+            print(f"  {C['cyan']}╚{'═' * 54}╝{C['reset']}")
+            action = input(f"  Opcao: ").strip().upper()
+
+            if action == "V":
+                info("Conjuntos funcionais descartados.")
+                return
+
+            if action == "P":
+                print()
+                print(f"  Cole o JSON (termine com Ctrl+Z + Enter no Windows, ou Ctrl+D no Linux):")
+                print()
+                lines = []
+                try:
+                    while True:
+                        line = input()
+                        lines.append(line)
+                except EOFError:
+                    pass
+                json_str = "\n".join(lines)
+                try:
+                    loaded = json.loads(json_str)
+                    llm_clusters = loaded.get("tier3", loaded).get("clusters", loaded.get("clusters", []))
+                    if not llm_clusters:
+                        warn("JSON nao contem conjuntos funcionais do Tier 3. Abortando.")
+                        return
+                    with open(json_path, "w", encoding="utf-8") as f:
+                        json.dump(loaded, f, indent=2, ensure_ascii=False)
+                    ok(f"JSON salvo em {json_path}")
+                except json.JSONDecodeError:
+                    warn("JSON invalido. Abortando.")
+                    return
+
+            elif action == "C":
+                if not os.path.exists(json_path):
+                    warn(f"Arquivo nao encontrado: {json_path}")
+                    print(f"  Salve o JSON do navegador nesta pasta primeiro.")
+                    return
+                with open(json_path, "r", encoding="utf-8") as f:
+                    loaded = json.load(f)
+                llm_clusters = loaded.get("tier3", loaded).get("clusters", loaded.get("clusters", []))
+                if not llm_clusters:
+                    warn("Arquivo JSON nao contem conjuntos funcionais do Tier 3. Abortando.")
+                    return
+                llm_clusters = normalize_tier3_sets(llm_clusters, all_reports)
+                ok(f"{len(llm_clusters)} conjuntos funcionais carregados de {json_path}")
+            else:
+                warn("Opcao invalida. Conjuntos funcionais descartados.")
+                return
+
+            llm_clusters = normalize_tier3_sets(llm_clusters, all_reports)
 
             G = C["green"]; CY = C["cyan"]; Y = C["yellow"]; R = C["reset"]; D = C["dim"]; B = C["bold"]
             print()
             for idx, c in enumerate(llm_clusters, 1):
-                name = c.get("name", f"CLUSTER_{idx}")
+                name = c.get("name", f"CONJUNTO_{idx}")
                 reason = c.get("reason", "")
                 users_list = c.get("users", [])
-                routines_list = c.get("common_routines", [])
+                routines_list = c.get("routines", c.get("common_routines", []))
 
                 print(f"  {CY}{chr(0x250C)}{'─' * 52}{chr(0x2510)}{R}")
-                print(f"  {CY}{chr(0x2502)}{R} {B}Cluster #{idx}: {G}{name}{R}")
+                print(f"  {CY}{chr(0x2502)}{R} {B}Conjunto #{idx}: {G}{name}{R}")
                 if reason:
                     print(f"  {CY}{chr(0x2502)}{R} {D}Motivo: {reason}{R}")
                 print(f"  {CY}{chr(0x2502)}{R} Usuarios ({len(users_list)}): {', '.join(users_list[:6])}{'...' if len(users_list) > 6 else ''}")
-                print(f"  {CY}{chr(0x2502)}{R} Rotinas comuns: {len(routines_list)}")
+                print(f"  {CY}{chr(0x2502)}{R} Rotinas relacionadas: {len(routines_list)}")
                 sample = routines_list[:6]
                 print(f"  {CY}{chr(0x2502)}{R}   Ex: {', '.join(sample)}{'...' if len(routines_list) > 6 else ''}")
                 print(f"  {CY}{chr(0x2514)}{'─' * 52}{chr(0x2518)}{R}")
 
             print()
-            print(f"  {B}[G]{R} Gerar SQL completo (4 tiers) com estes clusters")
+            print(f"  {B}[G]{R} Gerar SQL completo (4 tiers) com estes conjuntos")
             print(f"  {B}[E]{R} Editar nomes antes de gerar")
             print(f"  {B}[V]{R} Voltar (nao gerar nada)")
             action = input(f"  Opcao: ").strip().upper()
 
             if action == "V":
-                info("Clusters descartados.")
+                info("Conjuntos funcionais descartados.")
                 return
 
             if action == "E":
                 print(f"\n  {B}Edicao de nomes:{R}")
                 for idx, c in enumerate(llm_clusters):
-                    name = c.get("name", f"CLUSTER_{idx}")
+                    name = c.get("name", f"CONJUNTO_{idx}")
                     users_list = c.get("users", [])
-                    val = input(f"  Cluster #{idx} ({', '.join(users_list[:3])}...) [{name}]: ").strip()
+                    val = input(f"  Conjunto #{idx} ({', '.join(users_list[:3])}...) [{name}]: ").strip()
                     if val:
                         c["name"] = val.upper()
 
             _saved_llm_clusters = llm_clusters
-            info(f"Clusters salvos ({len(llm_clusters)}). Use opcao 2 para gerar o SQL.")
+            info(f"Conjuntos funcionais salvos ({len(llm_clusters)}). Use opcao 2 para gerar o SQL.")
+
+    except Exception as e:
+        fail(str(e))
+
+
+def _load_reports_from_files():
+    output_dir = OUTPUT_DIR
+    if not os.path.isdir(output_dir):
+        return []
+    reports = []
+    for fname in sorted(os.listdir(output_dir)):
+        if not fname.endswith('_access.json'):
+            continue
+        fpath = os.path.join(output_dir, fname)
+        try:
+            with open(fpath, 'r', encoding='utf-8') as f:
+                rep = json.load(f)
+            if 'user' not in rep or 'routines_summary' not in rep:
+                continue
+            reports.append(rep)
+        except Exception:
+            continue
+    return reports
+
+
+def run_organizational_analysis():
+    global _saved_llm_clusters
+
+    if not cfg.EMPRESA_NAME:
+        warn("Nome da empresa nao definido. Configure em Parametrizacao -> Nome da empresa.")
+        return
+
+    if not cfg.LLM_API_KEY:
+        warn("LLM nao configurada. O Tier 3 sera gerado por Jaccard (sem LLM).")
+        print(f"  {C['dim']}Configure LLM em Parametrizacao para sugestoes automaticas.{C['reset']}")
+
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+    cls()
+    print(BANNER)
+    G = C["green"]; CY = C["cyan"]; D = C["dim"]; B = C["bold"]; Y = C["yellow"]; R = C["reset"]
+    print(f"  {CY}{chr(0x2500) * 56}{R}")
+    print(f"  {CY}  {B}FONTE DOS DADOS{R}")
+    print(f"  {CY}  {D}Escolha como obter os dados dos usuarios{R}")
+    print(f"  {CY}{chr(0x2500) * 56}{R}")
+    print()
+    print(f"  {B}[M]{R} Mapear do banco (completo)")
+    print(f"     {D}Conecta ao SQL Server e mapeia todos os usuarios{D}")
+    print()
+    print(f"  {B}[R]{R} Reusar arquivos mapeados (rapido)")
+    print(f"     {D}Carrega os *_access.json ja existentes na pasta output/{D}")
+    print()
+    print(f"  {B}[V]{R} Voltar")
+    print()
+    action = input(f"  Opcao: ").strip().upper()
+
+    if action == "V":
+        return
+
+    if action == "R":
+        all_reports = _load_reports_from_files()
+        if not all_reports:
+            warn("Nenhum arquivo *_access.json encontrado em output/. Execute o mapeamento primeiro.")
+            return
+        print(f"  {C['green']}Carregados {len(all_reports)} relatorios da pasta output/{C['reset']}")
+        schema = None
+    elif action == "M":
+        all_reports = None
+        schema = None
+    else:
+        warn("Opcao invalida.")
+        return
+
+    if all_reports is None:
+        section("CONEXAO")
+        spin("Conectando ao banco MSSQL...", 0.6)
+        try:
+            with get_connection() as conn:
+                ok("Conectado com sucesso!")
+
+                section("DISCOVERY")
+                spin("Descobrindo estrutura das tabelas...", 1.0)
+                schema = discover_columns_for_tables(SCHEMA_TABLES, conn)
+                ok()
+                print_schema_summary(schema)
+
+                section("MAPEANDO USUARIOS")
+                mapper = UserMapper(schema, conn)
+                users = mapper.list_non_blocked_users()
+
+                if not users:
+                    warn("Nenhum usuario nao bloqueado encontrado.")
+                    return
+
+                total = len(users)
+                all_reports = []
+                fail_count = 0
+
+                for i, user_info in enumerate(users, 1):
+                    login = user_info["login"]
+                    login_display = login if login else f"ID_{user_info['id']}"
+                    print(f"\r  {C['cyan']}[{i}/{total}]{C['reset']} \033[1m{login_display}\033[0m", end="", flush=True)
+
+                    try:
+                        report = mapper.build_full_report(login)
+                        if report is None:
+                            fail_count += 1
+                            continue
+                        report["_conn"] = conn
+                        json_path = save_report_json(report, login)
+                        all_reports.append(report)
+                    except Exception as e:
+                        error(f"Erro ao mapear {login_display}: {e}")
+                        fail_count += 1
+
+                print()
+                success_count = len(all_reports)
+                print(f"  Mapeados: {C['green']}{success_count}{C['reset']} | Falhas: {C['red']}{fail_count}{C['reset']}")
+        except Exception as e:
+            fail(str(e))
+            return
+
+    if not all_reports:
+        warn("Nenhum relatorio gerado. Abortando.")
+        return
+
+    zero_routine_users = []
+    filtered_reports = []
+    for rep in all_reports:
+        if len(rep.get("routines_summary", [])) == 0:
+            zero_routine_users.append(rep["user"])
+        else:
+            filtered_reports.append(rep)
+
+    if zero_routine_users:
+        print(f"  {C['yellow']}[FILTRO]{C['reset']} {len(zero_routine_users)} usuarios sem rotinas ignorados.")
+
+    if not filtered_reports:
+        warn("Nenhum usuario com rotinas encontrado. Abortando.")
+        return
+
+    all_reports = filtered_reports
+
+    section("TIER 1 — GERAL")
+    all_sets = []
+    for rep in all_reports:
+        rset = set(r["routine"] for r in rep.get("routines_summary", []) if r.get("routine"))
+        all_sets.append(rset)
+    tier1_common = all_sets[0].copy()
+    for s in all_sets[1:]:
+        tier1_common &= s
+    print(f"  Rotinas comuns a TODOS ({len(all_reports)} usuarios): {C['green']}{len(tier1_common)}{C['reset']}")
+
+    tier1_routines = []
+    routines_details = {}
+    for rep in all_reports:
+        for r in rep.get("routines_summary", []):
+            code = r.get("routine", "")
+            if code not in routines_details:
+                routines_details[code] = r.get("description", "")
+    for code in sorted(tier1_common):
+        tier1_routines.append({"code": code, "desc": routines_details.get(code, "")})
+
+    section("TIER 2 — DEPARTAMENTOS")
+    dept_users = {}
+    for rep in all_reports:
+        dept = rep.get("user_depto", "").strip()
+        if not dept:
+            dept = "SEM_DEPARTAMENTO"
+        if dept not in dept_users:
+            dept_users[dept] = []
+        dept_users[dept].append(rep)
+
+    tier2_data = []
+    for dept_name in sorted(dept_users.keys()):
+        reps = dept_users[dept_name]
+        if len(reps) < 2:
+            continue
+        d_sets = []
+        for rep in reps:
+            rset = set(r["routine"] for r in rep.get("routines_summary", []) if r.get("routine"))
+            d_sets.append(rset)
+        common = d_sets[0].copy()
+        for s in d_sets[1:]:
+            common &= s
+        if common:
+            dept_routines = []
+            for code in sorted(common):
+                dept_routines.append({"code": code, "desc": routines_details.get(code, "")})
+            tier2_data.append({
+                "depto": dept_name,
+                "routines": dept_routines,
+                "users": [r["user"] for r in reps],
+            })
+            print(f"  {C['green']}{dept_name}{C['reset']}: {len(reps)} usuarios, {len(common)} rotinas comuns")
+    print(f"  Departamentos com rotinas comuns: {C['green']}{len(tier2_data)}{C['reset']}")
+
+    section("TIER 3 — PERFIS E CONJUNTOS FUNCIONAIS")
+    tier3_clusters = []
+    tier3_unclustered = []
+
+    tier2_routines_map = {}
+    for d in tier2_data:
+        tier2_routines_map[d["depto"]] = set(r["code"] for r in d["routines"])
+
+    profile_groups = build_equivalent_profile_groups(all_reports, tier1_common, tier2_routines_map)
+    if profile_groups:
+        tier3_clusters.extend(profile_groups)
+        print(f"  Perfis equivalentes automaticos: {C['green']}{len(profile_groups)}{C['reset']}")
+
+    users_data = []
+    for rep in all_reports:
+        routines = []
+        for r in rep.get("routines_summary", []):
+            code = r.get("routine", "")
+            desc = r.get("description", "")
+            if code:
+                routines.append({"code": code, "description": desc, "permissions": routine_permissions(r)})
+        users_data.append({
+            "user": rep["user"],
+            "routines": routines,
+        })
+
+    if cfg.LLM_API_KEY:
+        from src.llm_categorizer import suggest_clusters
+        llm_result = suggest_clusters(users_data)
+        if llm_result and llm_result.get("clusters"):
+            tier3_clusters.extend(normalize_tier3_sets(llm_result.get("clusters", []), all_reports))
+        else:
+            warn("LLM nao retornou conjuntos funcionais validos.")
+    else:
+        info("Sem LLM configurada. Tier 3 vazio — ajuste manualmente no dashboard.")
+
+    tier3_users = set()
+    for c in tier3_clusters:
+        tier3_users.update(c.get("users", []))
+    tier3_unclustered = sorted(set(rep["user"] for rep in all_reports) - tier3_users)
+
+    section("TIER 4 — EXCLUSIVO POR USUARIO")
+    tier4_users = build_tier4_users(all_reports, tier1_common, tier2_routines_map, tier3_clusters)
+
+    exclusive_count = sum(1 for u in tier4_users if u["exclusive_count"] > 0)
+    print(f"  Usuarios com rotinas exclusivas: {C['green']}{exclusive_count}{C['reset']}")
+
+    section("DASHBOARD")
+    users_detail = {}
+    user_routines_raw = {}
+    user_dept_map = {}
+    for rep in all_reports:
+        login = rep["user"]
+        top_routines = []
+        for r in rep.get("routines_summary", [])[:20]:
+            code = r.get("routine", "")
+            desc = r.get("description", "")
+            top_routines.append(f"{code} - {desc}" if desc else code)
+        users_detail[login] = {
+            "name": rep.get("user_name", login),
+            "login": login,
+            "depto": rep.get("user_depto", "") or "SEM_DEPARTAMENTO",
+            "total_routines": rep.get("total_routines", 0),
+            "all_routines": top_routines,
+        }
+        user_routines_raw[login] = user_routine_items(rep)
+        user_dept_map[login] = rep.get("user_depto", "").strip() or "SEM_DEPARTAMENTO"
+
+    html_path = os.path.join(OUTPUT_DIR, f"camadas_{cfg.EMPRESA_NAME}.html")
+    from src.html_report import generate_cluster_html
+    generate_cluster_html(
+        {"routines": tier1_routines, "total_users": len(all_reports), "empresa": cfg.EMPRESA_NAME},
+        tier2_data,
+        tier3_clusters,
+        tier3_unclustered,
+        {"users": tier4_users},
+        users_detail,
+        user_routines_raw,
+        user_dept_map,
+        html_path,
+        cfg.EMPRESA_NAME,
+    )
+
+    dept_html_path = os.path.join(OUTPUT_DIR, f"camadas_departamentos_{cfg.EMPRESA_NAME}.html")
+    from src.department_html_report import generate_department_html
+    try:
+        with get_connection() as rules_conn:
+            existing_rules = load_existing_rules(rules_conn)
+    except Exception:
+        existing_rules = None
+    generate_department_html(
+        build_department_analysis(all_reports, existing_rules=existing_rules),
+        dept_html_path,
+        cfg.EMPRESA_NAME,
+    )
+
+    import webbrowser
+    webbrowser.open(f"file://{os.path.abspath(html_path)}")
+    print(f"  {C['green']}Dashboard gerado:{C['reset']} {html_path}")
+    print(f"  {C['green']}Dashboard por departamento gerado:{C['reset']} {dept_html_path}")
+    print(f"  {C['cyan']}O navegador foi aberto com as 4 camadas.{C['reset']}")
+    print()
+    print(f"  {C['bold']}No navegador:{C['reset']}")
+    print(f"    - Aba TIER 1: rotinas comuns a todos")
+    print(f"    - Aba TIER 2: rotinas por departamento")
+    print(f"    - Aba TIER 3: revise conjuntos funcionais de rotinas")
+    print(f"    - Aba TIER 4: exclusivas (recalcula ao mexer Tier 3)")
+    print(f"    - Clique em {C['bold']}Salvar JSON{C['reset']} e salve na pasta output/")
+    print()
+
+    json_path = os.path.join(OUTPUT_DIR, f"clusters_{cfg.EMPRESA_NAME}.json")
+    print(f"  {C['cyan']}╔{'═' * 54}╗{C['reset']}")
+    print(f"  {C['cyan']}║{C['reset']} {C['bold']}[C]{C['reset']} Carregar JSON de {OUTPUT_DIR}/clusters_{cfg.EMPRESA_NAME}.json")
+    print(f"  {C['cyan']}║{C['reset']} {C['bold']}[V]{C['reset']} Voltar (descartar tudo)")
+    print(f"  {C['cyan']}╚{'═' * 54}╝{C['reset']}")
+    action2 = input(f"  Opcao: ").strip().upper()
+
+    if action2 == "V":
+        info("Conjuntos funcionais descartados.")
+        return
+
+    if action2 == "C":
+        if not os.path.exists(json_path):
+            warn(f"Arquivo nao encontrado: {json_path}")
+            print(f"  Salve o JSON do navegador primeiro e renomeie para clusters_{cfg.EMPRESA_NAME}.json")
+            return
+        with open(json_path, "r", encoding="utf-8") as f:
+            loaded = json.load(f)
+        tier3_saved = loaded.get("tier3", loaded).get("clusters", loaded.get("clusters", []))
+        if not tier3_saved:
+            warn("JSON nao contem conjuntos funcionais do Tier 3.")
+            return
+        _saved_llm_clusters = tier3_saved
+        ok(f"{len(tier3_saved)} conjuntos funcionais carregados. Use opcao 3 para gerar o SQL.")
+    else:
+        warn("Opcao invalida. Conjuntos funcionais descartados.")
+        return
+
+
+def run_generate_org_sql():
+    global _saved_llm_clusters
+
+    if not cfg.EMPRESA_NAME:
+        warn("Nome da empresa nao definido. Configure em Parametrizacao -> Nome da empresa.")
+        return
+
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+    json_path = os.path.join(OUTPUT_DIR, f"clusters_{cfg.EMPRESA_NAME}.json")
+    if not os.path.exists(json_path):
+        warn(f"Arquivo de conjuntos funcionais nao encontrado: {json_path}")
+        info("Execute a opcao 2 primeiro para gerar e ajustar os conjuntos funcionais.")
+        return
+
+    with open(json_path, "r", encoding="utf-8") as f:
+        loaded = json.load(f)
+
+    tier3_clusters = loaded.get("tier3", {}).get("clusters", loaded.get("clusters", []))
+    if not tier3_clusters:
+        warn("JSON nao contem conjuntos funcionais do Tier 3.")
+        return
+
+    print(f"  {C['green']}Conjuntos funcionais carregados:{C['reset']} {len(tier3_clusters)}")
+    for c in tier3_clusters:
+        routines = c.get("routines", c.get("common_routines", []))
+        print(f"    {c.get('name', '?')}: {len(c.get('users', []))} usuarios, {len(routines)} rotinas")
+
+    section("GERANDO SQL")
+    spin("Conectando ao banco MSSQL...", 0.6)
+    try:
+        with get_connection() as conn:
+            ok("Conectado com sucesso!")
+
+            spin("Descobrindo estrutura das tabelas...", 1.0)
+            schema = discover_columns_for_tables(SCHEMA_TABLES, conn)
+            ok()
+            print_schema_summary(schema)
+
+            mapper = UserMapper(schema, conn)
+            users = mapper.list_non_blocked_users()
+
+            if not users:
+                warn("Nenhum usuario nao bloqueado encontrado.")
+                return
+
+            total = len(users)
+            all_reports = []
+            fail_count = 0
+
+            for i, user_info in enumerate(users, 1):
+                login = user_info["login"]
+                login_display = login if login else f"ID_{user_info['id']}"
+                print(f"\r  {C['cyan']}[{i}/{total}]{C['reset']} \033[1m{login_display}\033[0m", end="", flush=True)
+                try:
+                    report = mapper.build_full_report(login)
+                    if report is None:
+                        fail_count += 1
+                        continue
+                    report["_conn"] = conn
+                    all_reports.append(report)
+                except Exception as e:
+                    error(f"Erro ao mapear {login_display}: {e}")
+                    fail_count += 1
+
+            print()
+            success_count = len(all_reports)
+            print(f"  Mapeados: {C['green']}{success_count}{C['reset']} | Falhas: {C['red']}{fail_count}{C['reset']}")
+
+            if not all_reports:
+                warn("Nenhum relatorio gerado. Abortando.")
+                return
+
+            zero_routine_users = [rep["user"] for rep in all_reports if len(rep.get("routines_summary", [])) == 0]
+            all_reports = [rep for rep in all_reports if len(rep.get("routines_summary", [])) > 0]
+            if zero_routine_users:
+                print(f"  {C['yellow']}[FILTRO]{C['reset']} {len(zero_routine_users)} usuarios sem rotinas ignorados.")
+
+            tier3_clusters = normalize_tier3_sets(tier3_clusters, all_reports)
+
+            from src.organizational_privileges import OrganizationalPrivilegeGenerator
+            gen = OrganizationalPrivilegeGenerator(all_reports, schema, cfg.EMPRESA_NAME, conn)
+            gen.generate_interactive(llm_clusters=tier3_clusters)
 
     except Exception as e:
         fail(str(e))
@@ -681,7 +1562,7 @@ def run_batch_organizational(choice):
         return
 
     if cfg.LLM_API_KEY and _saved_llm_clusters is None:
-        info(f"LLM configurada mas nenhum cluster pre-definido.")
+        info(f"LLM configurada mas nenhum conjunto funcional pre-definido.")
         info(f"Use opcao {C['bold']}7{C['reset']} primeiro para pre-visualizar a analise da LLM.")
         info(f"Ou continue para usar o modo manual (Jaccard).")
         print()
@@ -746,7 +1627,24 @@ def run_batch_organizational(choice):
                 warn("Nenhum relatorio gerado. Abortando.")
                 return
 
+            zero_routine_users = []
+            filtered_reports = []
+            for rep in all_reports:
+                if len(rep.get("routines_summary", [])) == 0:
+                    zero_routine_users.append(rep["user"])
+                else:
+                    filtered_reports.append(rep)
+            if zero_routine_users:
+                print(f"  {C['yellow']}[FILTRO]{C['reset']} {len(zero_routine_users)} usuarios sem rotinas ignorados.")
+            if not filtered_reports:
+                warn("Nenhum usuario com rotinas. Abortando.")
+                return
+            all_reports = filtered_reports
+
             print(f"\n  {C['cyan']}{chr(0x2502)}{C['reset']} {C['bold']}Analisando camadas organizacionais...{C['reset']}")
+
+            if _saved_llm_clusters is not None:
+                _saved_llm_clusters = normalize_tier3_sets(_saved_llm_clusters, all_reports)
 
             gen = OrganizationalPrivilegeGenerator(all_reports, schema, cfg.EMPRESA_NAME, conn)
             gen.generate_interactive(llm_clusters=_saved_llm_clusters)
@@ -785,8 +1683,11 @@ def main():
             break
 
         elif choice in ("1", "2", "3"):
-            if choice == "2" and cfg.PRIVILEGE_MODE == "organizational_layer":
-                run_batch_organizational(choice)
+            if choice in ("2", "3") and cfg.PRIVILEGE_MODE == "organizational_layer":
+                if choice == "2":
+                    run_organizational_analysis()
+                elif choice == "3":
+                    run_generate_org_sql()
                 continue
 
             login_input = input(f"  {C['bold']}Usuario{C['reset']} [{C['dim']}{current_login} | ENTER = TODOS{C['reset']}]: ").strip()
@@ -815,8 +1716,8 @@ def main():
         elif choice == "6":
             run_import()
 
-        elif choice == "7":
-            run_llm_preview()
+        elif choice == "9":
+            wizard_organizacional()
 
         else:
             print(f"\n  {C['red']}Opcao invalida!{C['reset']}\n")
