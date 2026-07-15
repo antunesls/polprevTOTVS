@@ -463,6 +463,49 @@ class Tier3PromptTest(unittest.TestCase):
             [{"code": "MATA010", "permissions": ["Visualizar"]}, "MATA035"],
         )
 
+    def test_suggest_clusters_retries_with_smaller_catalog_when_response_is_truncated(self):
+        import src.llm_categorizer as llm_categorizer
+
+        original_api_key = llm_categorizer.llm_cfg.LLM_API_KEY
+        original_call_openrouter = llm_categorizer.call_openrouter
+        calls = []
+
+        def fake_call(prompt):
+            calls.append(prompt)
+            if len(calls) == 1:
+                return '{"clusters":[{"name":"P_CJ_COMPRAS","reason":"Rotinas de compras","routines":["MATA010","MATA020"],"users":[]'
+            return '{"clusters":[{"name":"P_CJ_COMPRAS","reason":"Rotinas de compras","routines":["MATA010","MATA020"],"users":[]}],"unclustered":[]}'
+
+        try:
+            llm_categorizer.llm_cfg.LLM_API_KEY = "test-key"
+            llm_categorizer.call_openrouter = fake_call
+
+            result = llm_categorizer.suggest_clusters([
+                {"user": "joao", "routines": [
+                    {"code": "MATA010", "description": "Pedido de compra", "permissions": ["Visualizar"]},
+                    {"code": "MATA020", "description": "Cotacao de compra", "permissions": ["Visualizar"]},
+                ]}
+            ])
+        finally:
+            llm_categorizer.call_openrouter = original_call_openrouter
+            llm_categorizer.llm_cfg.LLM_API_KEY = original_api_key
+
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(result["clusters"][0]["name"], "P_CJ_COMPRAS")
+
+    def test_compact_prompt_requests_fewer_sets_and_routines(self):
+        from src.llm_categorizer import build_prompt
+
+        prompt = build_prompt([
+            {"user": "joao", "routines": [
+                {"code": "MATA010", "description": "Pedido de compra", "permissions": ["Visualizar"]},
+                {"code": "MATA020", "description": "Cotacao de compra", "permissions": ["Visualizar"]},
+            ]}
+        ], max_routines=150)
+
+        self.assertIn("No maximo 12 conjuntos", prompt)
+        self.assertIn("No maximo 20 rotinas por conjunto", prompt)
+
 
 class DepartmentCanonicalizationTest(unittest.TestCase):
     def test_canonicalizes_obvious_department_variants_without_llm(self):

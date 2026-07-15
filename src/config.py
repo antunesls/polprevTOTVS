@@ -33,6 +33,8 @@ API_CONFIG = {
 DATA_MODE = "live"
 
 OUTPUT_DIR = "output"
+FILE_LOGGING_ENABLED = True
+LOG_DIR = os.path.join(OUTPUT_DIR, "logs")
 
 CONFIG_USER_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config_user.json")
 
@@ -67,6 +69,8 @@ def load_user_config():
         globals()["LLM_API_KEY"] = user_cfg.get("llm_api_key", "")
         globals()["LLM_BASE_URL"] = user_cfg.get("llm_base_url", "https://openrouter.ai/api/v1")
         globals()["LLM_MODEL"] = user_cfg.get("llm_model", "openai/gpt-4o-mini")
+        globals()["FILE_LOGGING_ENABLED"] = user_cfg.get("file_logging_enabled", True)
+        globals()["LOG_DIR"] = user_cfg.get("log_dir", os.path.join(OUTPUT_DIR, "logs"))
         api_cfg = user_cfg.get("api", {})
         if api_cfg:
             API_CONFIG.update(api_cfg)
@@ -82,6 +86,8 @@ def save_user_config():
         "llm_api_key": LLM_API_KEY,
         "llm_base_url": LLM_BASE_URL,
         "llm_model": LLM_MODEL,
+        "file_logging_enabled": FILE_LOGGING_ENABLED,
+        "log_dir": LOG_DIR,
         "api": {
             "enabled": API_CONFIG["enabled"],
             "base_url": API_CONFIG["base_url"],

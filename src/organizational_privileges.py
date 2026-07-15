@@ -44,6 +44,8 @@ class OrganizationalPrivilegeGenerator:
 
         self.new_rule_id = None
         self._total_features = 0
+        self._total_transacts = 0
+        self._total_user_rule_links = 0
 
     def _resolve_col(self, table, candidates):
         return column_exists(self.schema, table, candidates)
@@ -215,7 +217,10 @@ class OrganizationalPrivilegeGenerator:
         if not llm_result or not llm_result.get("clusters"):
             return None
 
-        clusters = normalize_tier3_sets(llm_result.get("clusters", []), self.reports)
+        raw_clusters = llm_result.get("clusters", [])
+        print(f"  {D}LLM retornou {len(raw_clusters)} conjuntos brutos{R}")
+        clusters = normalize_tier3_sets(raw_clusters, self.reports)
+        print(f"  {D}Validacao local: {len(clusters)} conjuntos aproveitados | {max(len(raw_clusters) - len(clusters), 0)} descartados{R}")
         if not clusters:
             print(f"  {Y}LLM retornou conjuntos, mas todos foram descartados na validacao local. Alternando para modo manual (Jaccard).{R}")
             return None
@@ -441,6 +446,21 @@ class OrganizationalPrivilegeGenerator:
 
     def _generate_sql(self):
         G = C["green"]; CY = C["cyan"]; R = C["reset"]; D = C["dim"]; B = C["bold"]; Y = C["yellow"]
+        start_rule_seq = self.new_rule_seq if hasattr(self, "new_rule_seq") else None
+        self._total_features = 0
+        self._total_transacts = 0
+        self._total_user_rule_links = 0
+
+        reused_tier3 = sum(1 for info in self.tier3_routines.values() if info.get("reuses_existing_rule"))
+        print(f"  {D}Entrada para o SQL:{R}")
+        print(f"  {D}  - Usuarios processados: {len(self.reports)}{R}")
+        print(f"  {D}  - Tier 1: {1 if self.tier1_routines else 0} regra geral{R}")
+        print(f"  {D}  - Tier 2: {len(self.tier2_routines)} regras por departamento{R}")
+        print(f"  {D}  - Tier 3: {len(self.tier3_routines)} conjuntos funcionais{R}")
+        if reused_tier3:
+            print(f"  {D}    - {reused_tier3} reaproveitam regras existentes{R}")
+        print(f"  {D}  - Tier 4: {len(self.tier4_routines)} regras exclusivas por usuario{R}")
+        print(f"  {D}Gerando INSERTs em SYS_RULES, SYS_RULES_FEATURES, SYS_RULES_TRANSACT e SYS_RULES_USR_RULES...{R}")
 
         rules_pk = self._resolve_col("SYS_RULES", ["RL__ID", "RUL_ID", "ID"])
         rules_name = self._resolve_col("SYS_RULES", ["RL__CODIGO", "RUL_NAME", "NAME", "RULES_NAME"])
@@ -450,6 +470,7 @@ class OrganizationalPrivilegeGenerator:
         max_id = self._get_max_id("SYS_RULES", rules_pk)
         self.new_rule_seq = extract_auto_rule_sequence(max_id) + 1
         self.new_rule_id = None
+        start_rule_seq = self.new_rule_seq
 
         fet_pk = self._resolve_col("SYS_RULES_FEATURES",
             ["RL__ITEM", "FET_ID", "ID", "RFE_ID"])
@@ -476,14 +497,19 @@ class OrganizationalPrivilegeGenerator:
         usr_rul_col = self._resolve_col("SYS_RULES_USR_RULES",
             ["USR_RL_ID", "RUL_ID", "URR_RUL_ID", "RUR_RUL_ID"])
 
-        all_users = sorted(set(rep["user"] for rep in self.reports))
+        login_to_user_id = {
+            rep["user"]: str(rep.get("user_id") or rep["user"]).strip() or rep["user"]
+            for rep in self.reports
+            if rep.get("user")
+        }
+        all_users = sorted(set(login_to_user_id.values()))
 
         dept_users = {}
         for rep in self.reports:
             dept = rep.get("user_depto", "").strip()
             if not dept:
                 dept = "SEM_DEPARTAMENTO"
-            dept_users.setdefault(dept, []).append(rep["user"])
+            dept_users.setdefault(dept, []).append(login_to_user_id.get(rep["user"], rep["user"]))
 
         bindings = []
 
@@ -555,7 +581,7 @@ class OrganizationalPrivilegeGenerator:
                     self._append_rule(lines, group_name,
                         f"Conjunto cross-departamento - {group_name}",
                         rules_pk, rules_name, rules_type, rules_desc)
-                    bindings.append((self.new_rule_id, sorted(info["members"]), group_name))
+                    bindings.append((self.new_rule_id, [login_to_user_id.get(user, user) for user in sorted(info["members"])], group_name))
                 if not reused:
                     for routine in sorted(info["routines"], key=lambda item: routine_code(item)):
                         self._append_features(lines, routine,
@@ -578,7 +604,7 @@ class OrganizationalPrivilegeGenerator:
                 self._append_rule(lines, rule_name,
                     f"Privilegio exclusivo - {user}",
                     rules_pk, rules_name, rules_type, rules_desc)
-                bindings.append((self.new_rule_id, [user], rule_name))
+                bindings.append((self.new_rule_id, [login_to_user_id.get(user, user)], rule_name))
                 for routine in sorted(routines):
                     self._append_features(lines, routine,
                         fet_pk, fet_rul, fet_func, fet_feat, fet_access, fet_menuoper, fet_menudef,
@@ -597,6 +623,7 @@ class OrganizationalPrivilegeGenerator:
                 for user in sorted(users):
                     lines.append(f"INSERT INTO SYS_RULES_USR_RULES ({usr_usr_col}, {usr_rul_col})")
                     lines.append(f"VALUES ({self._sanitize(user)}, {self._sanitize(rule_id)});")
+                    self._total_user_rule_links += 1
                 lines.append("")
         elif not bindings:
             lines.append("-- Nenhuma vinculacao gerada (sem regras criadas)")
@@ -607,7 +634,8 @@ class OrganizationalPrivilegeGenerator:
 
         lines.append("COMMIT")
         lines.append("")
-        lines.append(f"-- Total de regras criadas: {self.new_rule_seq - (extract_auto_rule_sequence(max_id) + 1)}")
+        total_rules = self.new_rule_seq - start_rule_seq
+        lines.append(f"-- Total de regras criadas: {total_rules}")
         lines.append(f"-- Total de features inseridas: {self._total_features}")
         lines.append("-- ATENCAO: Verifique os valores antes de executar em producao!")
 
@@ -619,8 +647,11 @@ class OrganizationalPrivilegeGenerator:
             f.write(sql_content)
 
         print(f"  {G}Script SQL salvo em: {B}{filepath}{R}")
-        print(f"  Regras criadas: {G}{self.new_rule_seq - (extract_auto_rule_sequence(max_id) + 1)}{R}")
-        print(f"  Features inseridas: {G}{self._total_features}{R}")
+        print(f"  {D}SQL gerado com sucesso:{R}")
+        print(f"  {D}  - SYS_RULES: {total_rules} inserts{R}")
+        print(f"  {D}  - SYS_RULES_FEATURES: {self._total_features} inserts{R}")
+        print(f"  {D}  - SYS_RULES_TRANSACT: {self._total_transacts} inserts{R}")
+        print(f"  {D}  - SYS_RULES_USR_RULES: {self._total_user_rule_links} inserts{R}")
 
     def _append_rule(self, lines, rule_name, rule_desc,
                      rules_pk, rules_name, rules_type, rules_desc):
@@ -743,3 +774,4 @@ class OrganizationalPrivilegeGenerator:
         if insert_cols:
             lines.append(f"INSERT INTO SYS_RULES_TRANSACT ({', '.join(insert_cols)})")
             lines.append(f"VALUES ({', '.join(insert_vals)});")
+            self._total_transacts += 1

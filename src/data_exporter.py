@@ -13,6 +13,7 @@ TABLES_TO_EXPORT = [
     ("SYS_GRP_GROUP", None),
     ("SYS_RULES", None),
     ("SYS_RULES_FEATURES", "D_E_L_E_T_ = ' '"),
+    ("SYS_RULES_TRANSACT", "D_E_L_E_T_ = ' '"),
     ("SYS_RULES_BUTTONS", None),
     ("SYS_RULES_GRP_RULES", None),
     ("SYS_RULES_USR_RULES", None),

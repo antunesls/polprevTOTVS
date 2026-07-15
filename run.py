@@ -5,6 +5,7 @@ import os
 import time
 import threading
 import json
+import atexit
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -15,6 +16,7 @@ import src.config as cfg
 from src.user_mapper import UserMapper
 from src.privilege_generator import PrivilegeGenerator, save_report_json
 from src.dashboard import generate_html
+from src.file_logger import start_file_logging, stop_file_logging
 from src.tier3 import apply_department_canonicalization, build_department_analysis, build_equivalent_profile_groups, build_tier4_users, load_existing_rules, normalize_tier3_sets, routine_permissions, user_routine_items
 
 
@@ -30,6 +32,7 @@ if os.name == "nt":
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 SPINNER_CHARS = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+_runtime_log_state = None
 
 
 BANNER_LINES = [
@@ -93,6 +96,21 @@ def spin_stop(stop_event, prefix, text, ok=True):
     icon = f"{C['green']}OK{C['reset']}" if ok else f"{C['red']}ERRO{C['reset']}"
     sys.stdout.write(f"\r  {C['cyan']}[{prefix}]{C['reset']} {icon}  {text}\n")
     sys.stdout.flush()
+
+
+def initialize_runtime_logging():
+    import src.config as runtime_cfg
+
+    if not getattr(runtime_cfg, "FILE_LOGGING_ENABLED", True):
+        return None
+
+    state = start_file_logging(runtime_cfg.LOG_DIR)
+    info(f"Log da sessao: {state['path']}")
+    return state
+
+
+def shutdown_runtime_logging(state):
+    stop_file_logging(state)
 
 
 def run_export():
@@ -670,6 +688,34 @@ def _run_org_analysis_with_reports(all_reports):
     exclusive_count = sum(1 for u in tier4_users if u["exclusive_count"] > 0)
     print(f"  Usuarios com rotinas exclusivas: {G}{exclusive_count}{R}")
 
+    _generate_org_dashboards(all_reports, tier1_routines, tier2_data, tier3_clusters, tier3_unclustered, tier4_users)
+    json_path = os.path.join(OUTPUT_DIR, f"clusters_{cfg.EMPRESA_NAME}.json")
+    print(f"  {CY}{chr(0x2554)}{'═' * 54}{chr(0x2557)}{R}")
+    print(f"  {CY}{chr(0x2551)}{R} {B}[C]{R} Carregar JSON de {OUTPUT_DIR}/clusters_{cfg.EMPRESA_NAME}.json")
+    print(f"  {CY}{chr(0x2551)}{R} {B}[V]{R} Voltar (descartar tudo)")
+    print(f"  {CY}{chr(0x255A)}{'═' * 54}{chr(0x255D)}{R}")
+    action2 = input(f"  Opcao: ").strip().upper()
+    if action2 == "V":
+        info("Conjuntos funcionais descartados.")
+        return
+    if action2 == "C":
+        if not os.path.exists(json_path):
+            warn(f"Arquivo nao encontrado: {json_path}")
+            return
+        with open(json_path, "r", encoding="utf-8") as f:
+            loaded = json.load(f)
+        tier3_saved = loaded.get("tier3", loaded).get("clusters", loaded.get("clusters", []))
+        if not tier3_saved:
+            warn("JSON nao contem conjuntos funcionais do Tier 3.")
+            return
+        _saved_llm_clusters = tier3_saved
+        ok(f"{len(tier3_saved)} conjuntos funcionais carregados. Use opcao 3 para gerar o SQL.")
+    else:
+        warn("Opcao invalida. Conjuntos funcionais descartados.")
+
+
+def _generate_org_dashboards(all_reports, tier1_routines, tier2_data, tier3_clusters, tier3_unclustered, tier4_users):
+    G = C["green"]; CY = C["cyan"]; R = C["reset"]
     section("DASHBOARD")
     users_detail = {}
     user_routines_raw = {}
@@ -716,29 +762,6 @@ def _run_org_analysis_with_reports(all_reports):
     print(f"  {G}Dashboard por departamento gerado:{R} {dept_html_path}")
     print(f"  {CY}O navegador foi aberto com as 4 camadas.{R}")
     print()
-    json_path = os.path.join(OUTPUT_DIR, f"clusters_{cfg.EMPRESA_NAME}.json")
-    print(f"  {CY}{chr(0x2554)}{'═' * 54}{chr(0x2557)}{R}")
-    print(f"  {CY}{chr(0x2551)}{R} {B}[C]{R} Carregar JSON de {OUTPUT_DIR}/clusters_{cfg.EMPRESA_NAME}.json")
-    print(f"  {CY}{chr(0x2551)}{R} {B}[V]{R} Voltar (descartar tudo)")
-    print(f"  {CY}{chr(0x255A)}{'═' * 54}{chr(0x255D)}{R}")
-    action2 = input(f"  Opcao: ").strip().upper()
-    if action2 == "V":
-        info("Conjuntos funcionais descartados.")
-        return
-    if action2 == "C":
-        if not os.path.exists(json_path):
-            warn(f"Arquivo nao encontrado: {json_path}")
-            return
-        with open(json_path, "r", encoding="utf-8") as f:
-            loaded = json.load(f)
-        tier3_saved = loaded.get("tier3", loaded).get("clusters", loaded.get("clusters", []))
-        if not tier3_saved:
-            warn("JSON nao contem conjuntos funcionais do Tier 3.")
-            return
-        _saved_llm_clusters = tier3_saved
-        ok(f"{len(tier3_saved)} conjuntos funcionais carregados. Use opcao 3 para gerar o SQL.")
-    else:
-        warn("Opcao invalida. Conjuntos funcionais descartados.")
 
 
 # ══════════════════════════════════════════════
@@ -2328,13 +2351,8 @@ def run_batch_organizational(choice):
         return
 
     if cfg.LLM_API_KEY and _saved_llm_clusters is None:
-        info(f"LLM configurada mas nenhum conjunto funcional pre-definido.")
-        info(f"Use opcao {C['bold']}7{C['reset']} primeiro para pre-visualizar a analise da LLM.")
-        info(f"Ou continue para usar o modo manual (Jaccard).")
-        print()
-        cont = input(f"  Continuar com modo manual? (S/n): ").strip().upper()
-        if cont == "N":
-            return
+        info(f"LLM configurada. O sistema tentara a analise automatica durante o processamento.")
+        info(f"A opcao {C['bold']}7{C['reset']} continua disponivel se voce quiser revisar a pre-visualizacao antes.")
 
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
@@ -2414,6 +2432,29 @@ def run_batch_organizational(choice):
 
             gen = OrganizationalPrivilegeGenerator(all_reports, schema, cfg.EMPRESA_NAME, conn)
             gen.generate_interactive(llm_clusters=_saved_llm_clusters)
+            _generate_org_dashboards(
+                all_reports,
+                [{"code": code, "desc": ""} for code in sorted(gen.tier1_routines)],
+                [
+                    {
+                        "depto": dept,
+                        "routines": [{"code": code, "desc": ""} for code in sorted(routines)],
+                        "users": [rep["user"] for rep in all_reports if (rep.get("user_depto", "").strip() or "SEM_DEPARTAMENTO") == dept],
+                    }
+                    for dept, routines in sorted(gen.tier2_routines.items())
+                ],
+                [
+                    {
+                        "name": name,
+                        "routines": list(info.get("routines", [])),
+                        "users": list(info.get("members", [])),
+                        **({"reuses_existing_rule": info["reuses_existing_rule"]} if info.get("reuses_existing_rule") else {}),
+                    }
+                    for name, info in sorted(gen.tier3_routines.items())
+                ],
+                sorted(set(rep["user"] for rep in all_reports) - set().union(*[set(info.get("members", [])) for info in gen.tier3_routines.values()] or [set()])),
+                [{"login": user, "exclusive_routines": sorted(routines), "exclusive_count": len(routines)} for user, routines in sorted(gen.tier4_routines.items())],
+            )
             _saved_llm_clusters = None
 
     except Exception as e:
@@ -2685,4 +2726,12 @@ def main():
 
 if __name__ == "__main__":
     load_user_config()
-    main()
+    _runtime_log_state = initialize_runtime_logging()
+    if _runtime_log_state is not None:
+        atexit.register(shutdown_runtime_logging, _runtime_log_state)
+    try:
+        main()
+    finally:
+        if _runtime_log_state is not None:
+            shutdown_runtime_logging(_runtime_log_state)
+            _runtime_log_state = None

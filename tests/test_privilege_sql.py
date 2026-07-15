@@ -110,7 +110,7 @@ class OrganizationalSqlTest(unittest.TestCase):
 
         self.assertIn("'A00001'", sql)
         self.assertIn("INSERT INTO SYS_RULES_TRANSACT", sql)
-        self.assertIn("VALUES ('usr001', 'A00001');", sql)
+        self.assertIn("VALUES ('000001', 'A00001');", sql)
 
 
 if __name__ == "__main__":

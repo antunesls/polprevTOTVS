@@ -16,13 +16,14 @@ C = {
 }
 
 MAX_PROMPT_ROUTINES = 500
+RETRY_PROMPT_ROUTINES = 150
 MAX_ROUTINE_DESC_LEN = 60
 
 if os.name == "nt":
     os.system("")
 
 
-def build_prompt(users_data):
+def build_prompt(users_data, max_routines=MAX_PROMPT_ROUTINES):
     routines_map = {}
     for u in users_data:
         for routine in u.get("routines", []):
@@ -49,7 +50,7 @@ def build_prompt(users_data):
         key=lambda item: (-item[1]["users"], item[0]),
     )
     total_routines = len(sorted_routines)
-    limited_routines = sorted_routines[:MAX_PROMPT_ROUTINES]
+    limited_routines = sorted_routines[:max_routines]
 
     entries = []
     for code, info in limited_routines:
@@ -65,9 +66,9 @@ def build_prompt(users_data):
 
     routines_block = "\n".join(entries)
     limit_notice = ""
-    if total_routines > MAX_PROMPT_ROUTINES:
+    if total_routines > max_routines:
         limit_notice = (
-            f"\nCatalogo limitado as {MAX_PROMPT_ROUTINES} rotinas mais recorrentes "
+            f"\nCatalogo limitado as {max_routines} rotinas mais recorrentes "
             f"de um total de {total_routines}, para respeitar o limite de contexto da LLM."
         )
 
@@ -92,6 +93,9 @@ REGRAS:
 9. Quando uma permissao for relevante, responda a rotina como objeto: {{"code":"MATA010","permissions":["Visualizar","Alterar"]}}.
 10. Permissoes maiores cobrem menores: quem tem Visualizar e Alterar cobre conjunto que exige apenas Visualizar.
 11. O campo "users" deve ser uma lista vazia; o sistema recalculara os usuarios automaticamente.
+12. No maximo 12 conjuntos no total.
+13. No maximo 20 rotinas por conjunto.
+14. Prefira JSON compacto e encerre a resposta logo apos fechar o objeto final.
 
 Catalogo de rotinas:
 {routines_block}
@@ -324,18 +328,41 @@ def suggest_clusters(users_data):
         return None
 
     print(f"\n  {CY}Consultando LLM ({llm_cfg.LLM_MODEL})...{R}")
-    prompt = build_prompt(users_data)
-    response_text = call_openrouter(prompt)
+    unique_routines = {
+        routine_code(r)
+        for user in users_data
+        for r in user.get("routines", [])
+        if routine_code(r)
+    }
+    response_text = None
+    result = None
+    attempt_limits = (MAX_PROMPT_ROUTINES, RETRY_PROMPT_ROUTINES)
+    for attempt_idx, prompt_limit in enumerate(attempt_limits, 1):
+        print(f"  {D}Entrada: {len(users_data)} usuarios | {len(unique_routines)} rotinas unicas | catalogo enviado: {prompt_limit}{R}")
+        print(f"  {D}Tentativa {attempt_idx}/{len(attempt_limits)}{R}")
+        prompt = build_prompt(users_data, max_routines=prompt_limit)
+        response_text = call_openrouter(prompt)
 
-    if not response_text:
-        return None
+        if not response_text:
+            if attempt_idx == 2:
+                return None
+            print(f"  {Y}LLM nao retornou resposta. Tentando novamente com catalogo reduzido...{R}")
+            continue
 
-    if not response_text.strip().endswith("}"):
-        print(f"  {Y}AVISO: Resposta da LLM parece truncada (nao termina com '}}').{R}")
-        print(f"  {Y}       Isso ocorre quando max_tokens e insuficiente para tantos usuarios.{R}")
-        print(f"  {D}Resposta (ultimos 200 chars): ...{response_text.strip()[-200:]}{R}")
+        if not response_text.strip().endswith("}"):
+            print(f"  {Y}AVISO: Resposta da LLM parece truncada (nao termina com '}}').{R}")
+            print(f"  {Y}       Isso ocorre quando max_tokens e insuficiente para tantos usuarios.{R}")
+            print(f"  {D}Resposta (ultimos 200 chars): ...{response_text.strip()[-200:]}{R}")
+            if attempt_idx == 1:
+                print(f"  {Y}Tentando novamente com catalogo reduzido ({RETRY_PROMPT_ROUTINES} rotinas)...{R}")
+                continue
 
-    result = extract_json(response_text)
+        result = extract_json(response_text)
+        if result:
+            break
+        if attempt_idx == 1:
+            print(f"  {Y}LLM retornou JSON invalido. Tentando novamente com catalogo reduzido...{R}")
+
     if not result:
         print(f"  {Y}LLM retornou formato JSON invalido.{R}")
         print(f"  {D}Resposta bruta (primeiros 500 chars):{R}")
