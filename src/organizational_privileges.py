@@ -4,11 +4,12 @@ import sys
 from collections import Counter, defaultdict
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import src.config as cfg
 from src.config import OUTPUT_DIR
 from src.discovery import column_exists
 from src.database import fetch_all, fetch_dicts
 from src.privilege_generator import extract_auto_rule_sequence, format_auto_rule_id, save_report_json
-from src.tier3 import apply_department_canonicalization, normalize_tier3_sets, routine_code, routine_permissions
+from src.tier3 import apply_department_canonicalization, build_department_common_routines, normalize_tier3_sets, routine_code, routine_permissions
 
 C = {
     "reset": "\033[0m",   "bold": "\033[1m",
@@ -49,6 +50,14 @@ class OrganizationalPrivilegeGenerator:
 
     def _resolve_col(self, table, candidates):
         return column_exists(self.schema, table, candidates)
+
+    def _fit_column_value(self, table, column_name, value):
+        from src.discovery import column_max_length
+        text = "" if value is None else str(value)
+        max_length = column_max_length(self.schema, table, column_name)
+        if max_length:
+            return text[:max_length]
+        return text
 
     def _sanitize(self, value):
         if value is None:
@@ -157,16 +166,15 @@ class OrganizationalPrivilegeGenerator:
             dept_users[dept].append(rep)
 
         print(f"  Departamentos encontrados: {G}{len(dept_users)}{R}")
+        min_users = cfg.department_min_users()
+        common_by_dept = build_department_common_routines(self.reports, min_users=min_users)
 
         for dept, reps in sorted(dept_users.items()):
-            if len(reps) < 2:
-                print(f"  {D}{dept}: {len(reps)} usuario (pulando - minimo 2){R}")
+            if len(reps) < min_users:
+                print(f"  {D}{dept}: {len(reps)} usuario (pulando - minimo {min_users}){R}")
                 continue
 
-            all_sets = [self._user_routine_set(rep) for rep in reps]
-            common = all_sets[0].copy()
-            for s in all_sets[1:]:
-                common &= s
+            common = common_by_dept.get(dept, set())
 
             if common:
                 self.tier2_routines[dept] = common
@@ -755,7 +763,7 @@ class OrganizationalPrivilegeGenerator:
             insert_vals.append(self._sanitize(routine_name))
         if trn_desc:
             insert_cols.append(trn_desc)
-            insert_vals.append(self._sanitize(description))
+            insert_vals.append(self._sanitize(self._fit_column_value("SYS_RULES_TRANSACT", trn_desc, description)))
         if trn_access:
             access_value = "1"
             for feat_info in (features or {}).values():

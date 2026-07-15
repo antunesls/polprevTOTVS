@@ -10,6 +10,7 @@ DB_CONFIG = {
 }
 
 PRIVILEGE_MODE = "per_user"
+IGNORE_SINGLE_USER_DEPARTMENTS = True
 
 EMPRESA_NAME = ""
 
@@ -65,6 +66,7 @@ def load_user_config():
             user_cfg = json.load(f)
         DB_CONFIG.update(user_cfg.get("db", {}))
         globals()["PRIVILEGE_MODE"] = user_cfg.get("privilege_mode", "per_user")
+        globals()["IGNORE_SINGLE_USER_DEPARTMENTS"] = user_cfg.get("ignore_single_user_departments", True)
         globals()["EMPRESA_NAME"] = user_cfg.get("empresa_name", "")
         globals()["LLM_API_KEY"] = user_cfg.get("llm_api_key", "")
         globals()["LLM_BASE_URL"] = user_cfg.get("llm_base_url", "https://openrouter.ai/api/v1")
@@ -82,6 +84,7 @@ def save_user_config():
     data = {
         "db": {k: DB_CONFIG[k] for k in ("server", "database", "username", "password", "driver")},
         "privilege_mode": PRIVILEGE_MODE,
+        "ignore_single_user_departments": IGNORE_SINGLE_USER_DEPARTMENTS,
         "empresa_name": EMPRESA_NAME,
         "llm_api_key": LLM_API_KEY,
         "llm_base_url": LLM_BASE_URL,
@@ -103,3 +106,7 @@ def save_user_config():
     }
     with open(CONFIG_USER_PATH, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
+
+
+def department_min_users():
+    return 2 if IGNORE_SINGLE_USER_DEPARTMENTS else 1

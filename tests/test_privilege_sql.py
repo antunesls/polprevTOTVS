@@ -11,31 +11,31 @@ from src.privilege_generator import PrivilegeGenerator
 
 SCHEMA = {
     "SYS_RULES": [
-        {"COLUMN_NAME": "RL__ID"},
-        {"COLUMN_NAME": "RL__CODIGO"},
-        {"COLUMN_NAME": "RL__DESCRI"},
-        {"COLUMN_NAME": "RUL_TYPE"},
+        {"COLUMN_NAME": "RL__ID", "CHARACTER_MAXIMUM_LENGTH": None},
+        {"COLUMN_NAME": "RL__CODIGO", "CHARACTER_MAXIMUM_LENGTH": 20},
+        {"COLUMN_NAME": "RL__DESCRI", "CHARACTER_MAXIMUM_LENGTH": 60},
+        {"COLUMN_NAME": "RUL_TYPE", "CHARACTER_MAXIMUM_LENGTH": 1},
     ],
     "SYS_RULES_FEATURES": [
-        {"COLUMN_NAME": "RL__ITEM"},
-        {"COLUMN_NAME": "RL__ID"},
-        {"COLUMN_NAME": "RL__ROTINA"},
-        {"COLUMN_NAME": "RL__DESMDEF"},
-        {"COLUMN_NAME": "RL__ACESSO"},
-        {"COLUMN_NAME": "RL__MENUOPER"},
-        {"COLUMN_NAME": "RL__MENUDEF"},
+        {"COLUMN_NAME": "RL__ITEM", "CHARACTER_MAXIMUM_LENGTH": None},
+        {"COLUMN_NAME": "RL__ID", "CHARACTER_MAXIMUM_LENGTH": None},
+        {"COLUMN_NAME": "RL__ROTINA", "CHARACTER_MAXIMUM_LENGTH": 10},
+        {"COLUMN_NAME": "RL__DESMDEF", "CHARACTER_MAXIMUM_LENGTH": 40},
+        {"COLUMN_NAME": "RL__ACESSO", "CHARACTER_MAXIMUM_LENGTH": 1},
+        {"COLUMN_NAME": "RL__MENUOPER", "CHARACTER_MAXIMUM_LENGTH": None},
+        {"COLUMN_NAME": "RL__MENUDEF", "CHARACTER_MAXIMUM_LENGTH": 20},
     ],
     "SYS_RULES_TRANSACT": [
-        {"COLUMN_NAME": "RL__ID"},
-        {"COLUMN_NAME": "RL__ROTINA"},
-        {"COLUMN_NAME": "RL__DESROT"},
-        {"COLUMN_NAME": "RL__ACESSO"},
-        {"COLUMN_NAME": "RL__CHKSUM"},
-        {"COLUMN_NAME": "D_E_L_E_T_"},
+        {"COLUMN_NAME": "RL__ID", "CHARACTER_MAXIMUM_LENGTH": None},
+        {"COLUMN_NAME": "RL__ROTINA", "CHARACTER_MAXIMUM_LENGTH": 10},
+        {"COLUMN_NAME": "RL__DESROT", "CHARACTER_MAXIMUM_LENGTH": 40},
+        {"COLUMN_NAME": "RL__ACESSO", "CHARACTER_MAXIMUM_LENGTH": 1},
+        {"COLUMN_NAME": "RL__CHKSUM", "CHARACTER_MAXIMUM_LENGTH": 32},
+        {"COLUMN_NAME": "D_E_L_E_T_", "CHARACTER_MAXIMUM_LENGTH": 1},
     ],
     "SYS_RULES_USR_RULES": [
-        {"COLUMN_NAME": "USER_ID"},
-        {"COLUMN_NAME": "USR_RL_ID"},
+        {"COLUMN_NAME": "USER_ID", "CHARACTER_MAXIMUM_LENGTH": None},
+        {"COLUMN_NAME": "USR_RL_ID", "CHARACTER_MAXIMUM_LENGTH": None},
     ],
 }
 
@@ -86,6 +86,16 @@ class PrivilegeSqlGenerationTest(unittest.TestCase):
         self.assertIn("'Produtos'", sql)
         self.assertIn("'A00001'", sql)
 
+    def test_generate_sql_truncates_transact_description_to_column_size(self):
+        report = build_report()
+        report["routines_summary"][0]["description"] = "Movimentos Bancarios - Agrupado por Bancos"
+        generator = FakePrivilegeGenerator(report, SCHEMA)
+
+        sql = generator.generate_sql("P_AUTO_TESTE")
+
+        self.assertIn("'Movimentos Bancarios - Agrupado por Banc'", sql)
+        self.assertNotIn("'Movimentos Bancarios - Agrupado por Bancos'", sql)
+
 
 class SchemaDiscoveryTest(unittest.TestCase):
     def test_schema_candidates_include_rules_transact(self):
@@ -111,6 +121,23 @@ class OrganizationalSqlTest(unittest.TestCase):
         self.assertIn("'A00001'", sql)
         self.assertIn("INSERT INTO SYS_RULES_TRANSACT", sql)
         self.assertIn("VALUES ('000001', 'A00001');", sql)
+
+    def test_organizational_sql_truncates_transact_description_to_column_size(self):
+        report = build_report()
+        report["routines_summary"][0]["description"] = "Movimentos Bancarios - Agrupado por Bancos"
+        report["routines_summary"][0]["has_explicit_privilege"] = False
+        reports = [report]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch("src.organizational_privileges.OUTPUT_DIR", tmpdir):
+                generator = FakeOrganizationalPrivilegeGenerator(reports, SCHEMA, "TESTE", conn=None)
+                generator.tier1_routines = {"MATA010"}
+                generator._generate_sql()
+
+                sql = Path(tmpdir, "TESTE_organizacional.sql").read_text(encoding="utf-8")
+
+        self.assertIn("'Movimentos Bancarios - Agrupado por Banc'", sql)
+        self.assertNotIn("'Movimentos Bancarios - Agrupado por Bancos'", sql)
 
 
 if __name__ == "__main__":

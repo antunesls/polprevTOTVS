@@ -627,18 +627,14 @@ def _run_org_analysis_with_reports(all_reports):
         if dept not in dept_users:
             dept_users[dept] = []
         dept_users[dept].append(rep)
+    min_users = cfg.department_min_users()
+    common_by_dept = build_department_common_routines(all_reports, min_users=min_users)
     tier2_data = []
     for dept_name in sorted(dept_users.keys()):
         reps = dept_users[dept_name]
-        if len(reps) < 2:
+        if len(reps) < min_users:
             continue
-        d_sets = []
-        for rep in reps:
-            rset = set(r["routine"] for r in rep.get("routines_summary", []) if r.get("routine"))
-            d_sets.append(rset)
-        common = d_sets[0].copy()
-        for s in d_sets[1:]:
-            common &= s
+        common = common_by_dept.get(dept_name, set())
         if common:
             dept_routines = []
             for code in sorted(common):
@@ -2091,18 +2087,14 @@ def run_organizational_analysis():
             dept_users[dept] = []
         dept_users[dept].append(rep)
 
+    min_users = cfg.department_min_users()
+    common_by_dept = build_department_common_routines(all_reports, min_users=min_users)
     tier2_data = []
     for dept_name in sorted(dept_users.keys()):
         reps = dept_users[dept_name]
-        if len(reps) < 2:
+        if len(reps) < min_users:
             continue
-        d_sets = []
-        for rep in reps:
-            rset = set(r["routine"] for r in rep.get("routines_summary", []) if r.get("routine"))
-            d_sets.append(rset)
-        common = d_sets[0].copy()
-        for s in d_sets[1:]:
-            common &= s
+        common = common_by_dept.get(dept_name, set())
         if common:
             dept_routines = []
             for code in sorted(common):

@@ -145,6 +145,25 @@ def build_department_analysis(reports, existing_rules=None):
     return result
 
 
+def build_department_common_routines(reports, min_users=2):
+    reports = apply_department_canonicalization(reports)
+    by_dept = {}
+    for report in reports or []:
+        dept = report.get("user_depto", "").strip() or "SEM_DEPARTAMENTO"
+        by_dept.setdefault(dept, []).append(report)
+
+    result = {}
+    for dept, dept_reports in sorted(by_dept.items()):
+        if len(dept_reports) < min_users:
+            continue
+        routine_sets = [_routine_sets_by_user([report]).get(report.get("user"), set()) for report in dept_reports]
+        common = set.intersection(*routine_sets) if routine_sets else set()
+        if common:
+            result[dept] = common
+
+    return result
+
+
 def _routine_sets_by_user(reports):
     result = {}
     for rep in reports:

@@ -191,6 +191,14 @@ class PrivilegeGenerator:
         from src.discovery import column_exists
         return column_exists(self.schema, table, candidates)
 
+    def _fit_column_value(self, table, column_name, value):
+        from src.discovery import column_max_length
+        text = "" if value is None else str(value)
+        max_length = column_max_length(self.schema, table, column_name)
+        if max_length:
+            return text[:max_length]
+        return text
+
     def _get_max_id(self, table, pk_col):
         if not pk_col:
             return None
@@ -237,7 +245,7 @@ class PrivilegeGenerator:
             insert_vals.append(self._sanitize(routine_code))
         if trn_desc:
             insert_cols.append(trn_desc)
-            insert_vals.append(self._sanitize(routine.get("description", "")))
+            insert_vals.append(self._sanitize(self._fit_column_value("SYS_RULES_TRANSACT", trn_desc, routine.get("description", ""))))
         if trn_access:
             insert_cols.append(trn_access)
             insert_vals.append(self._sanitize(self._routine_access_value(routine)))

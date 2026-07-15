@@ -1,6 +1,6 @@
 import unittest
 
-from src.tier3 import apply_department_canonicalization, build_department_analysis, build_equivalent_profile_groups, build_tier4_users, load_existing_rules, match_profile_to_existing_rules, normalize_tier3_sets, routine_permissions, user_routine_items
+from src.tier3 import apply_department_canonicalization, build_department_analysis, build_department_common_routines, build_equivalent_profile_groups, build_tier4_users, load_existing_rules, match_profile_to_existing_rules, normalize_tier3_sets, routine_permissions, user_routine_items
 
 
 class Tier3FunctionalSetsTest(unittest.TestCase):
@@ -297,6 +297,58 @@ class Tier3FunctionalSetsTest(unittest.TestCase):
         self.assertEqual(by_login["maria"]["exclusive_count"], 0)
         self.assertEqual(by_login["vitor"]["exclusive_count"], 0)
         self.assertEqual(by_login["ana"]["exclusive_count"], 0)
+
+    def test_build_department_common_routines_ignores_single_user_departments_by_default(self):
+        reports = [
+            {
+                "user": "joao",
+                "user_name": "Joao",
+                "user_depto": "COMERCIAL",
+                "routines_summary": [{"routine": "MATA010"}, {"routine": "MATA020"}],
+            },
+            {
+                "user": "maria",
+                "user_name": "Maria",
+                "user_depto": "COMERCIAL",
+                "routines_summary": [{"routine": "MATA010"}],
+            },
+            {
+                "user": "ana",
+                "user_name": "Ana",
+                "user_depto": "CONTROLADORIA",
+                "routines_summary": [{"routine": "FINA001"}],
+            },
+        ]
+
+        result = build_department_common_routines(reports)
+
+        self.assertEqual(result, {"COMERCIAL": {"MATA010"}})
+
+    def test_build_department_common_routines_can_include_single_user_departments(self):
+        reports = [
+            {
+                "user": "joao",
+                "user_name": "Joao",
+                "user_depto": "COMERCIAL",
+                "routines_summary": [{"routine": "MATA010"}, {"routine": "MATA020"}],
+            },
+            {
+                "user": "maria",
+                "user_name": "Maria",
+                "user_depto": "COMERCIAL",
+                "routines_summary": [{"routine": "MATA010"}],
+            },
+            {
+                "user": "ana",
+                "user_name": "Ana",
+                "user_depto": "CONTROLADORIA",
+                "routines_summary": [{"routine": "FINA001"}],
+            },
+        ]
+
+        result = build_department_common_routines(reports, min_users=1)
+
+        self.assertEqual(result, {"COMERCIAL": {"MATA010"}, "CONTROLADORIA": {"FINA001"}})
 
 
 class ExistingRulesTest(unittest.TestCase):

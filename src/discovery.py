@@ -54,6 +54,20 @@ def column_exists(schema, table, candidate_names):
     return None
 
 
+def column_max_length(schema, table, column_name):
+    if table not in schema or schema[table] is None or not column_name:
+        return None
+    for col in schema[table]:
+        if col.get("COLUMN_NAME") != column_name:
+            continue
+        length = col.get("CHARACTER_MAXIMUM_LENGTH")
+        try:
+            return int(length) if length is not None and int(length) > 0 else None
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
 def print_schema_summary(schema):
     G = "\033[92m"; Y = "\033[93m"; D = "\033[2m"; R = "\033[0m"
     print(f"\n  {G}Tabelas encontradas no banco:{R}")
