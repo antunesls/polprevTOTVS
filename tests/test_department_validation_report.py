@@ -114,6 +114,36 @@ class DepartmentValidationReportTest(unittest.TestCase):
                         "in_menu": True,
                         "effective_access": "SEM_REGRA",
                         "disabled_by_acbrowse": False,
+                        "browse_features": {
+                            "Pesquisar": True,
+                            "Visualizar": True,
+                            "Incluir": False,
+                            "Alterar": False,
+                            "Excluir": False,
+                            "Extra": True,
+                        },
+                        "features": {},
+                    },
+                    {
+                        "routine": "MATA103",
+                        "description": "Documento Entrada",
+                        "menu_name": "COMPRAS_COMPRAS",
+                        "module": "",
+                        "in_menu": True,
+                        "effective_access": "SEM_REGRA",
+                        "disabled_by_acbrowse": False,
+                        "browse_permissions": [
+                            {"menu_oper": 1, "available": True},
+                            {"menu_oper": 2, "available": True},
+                            {"menu_oper": 3, "available": False},
+                            {"menu_oper": 4, "available": False},
+                            {"menu_oper": 5, "available": False},
+                            {"menu_oper": 6, "available": True},
+                            {"menu_oper": 7, "available": True},
+                            {"menu_oper": 8, "available": True},
+                            {"menu_oper": 9, "available": True},
+                            {"menu_oper": 10, "available": True},
+                        ],
                         "features": {},
                     },
                     {
@@ -135,7 +165,11 @@ class DepartmentValidationReportTest(unittest.TestCase):
             html = Path(tmpdir, "COMPRAS.html").read_text(encoding="utf-8")
 
         self.assertIn("COMR015", html)
+        self.assertIn("MATA103", html)
         self.assertNotIn("COMR016", html)
+        self.assertIn("Acesso a rotina", html)
+        self.assertIn("Pesquisar, Visualizar, Cod.Barra, Copiar, Retornar, Prep.Doc.Saida, Extra", html)
+        self.assertNotIn("Documento Entrada</td><td>Pesquisar, Visualizar, Incluir", html)
 
     def test_renders_empty_message_for_user_without_allowed_routines(self):
         from src.department_validation_report import generate_department_validation_reports

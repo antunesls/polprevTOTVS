@@ -43,7 +43,32 @@ def _allowed_routines(report):
             if str((info or {}).get("access") or "").strip().upper() == "PERMITIDO":
                 permissions.append(str(name).strip())
         if not permissions:
-            permissions.append("Acesso operacional")
+            available_ops = []
+            unavailable_count = 0
+            browse_permissions = routine.get("browse_permissions", []) or []
+            browse_names = {
+                1: "Pesquisar",
+                2: "Visualizar",
+                3: "Incluir",
+                4: "Alterar",
+                5: "Excluir",
+                6: "Cod.Barra",
+                7: "Copiar",
+                8: "Retornar",
+                9: "Prep.Doc.Saida",
+                10: "Extra",
+            }
+            for item in browse_permissions:
+                menu_oper = int(item.get("menu_oper") or 0)
+                if item.get("available"):
+                    if menu_oper in browse_names:
+                        available_ops.append(browse_names[menu_oper])
+                else:
+                    unavailable_count += 1
+            if available_ops and unavailable_count > 0:
+                permissions = available_ops
+        if not permissions:
+            permissions.append("Acesso a rotina")
         routines.append({
             "routine": str(routine.get("routine") or "").strip(),
             "description": str(routine.get("description") or "").strip(),

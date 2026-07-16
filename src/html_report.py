@@ -3,11 +3,18 @@ import os
 
 
 def generate_cluster_html(tier1, tier2, tier3_clusters, unclustered, tier4, users_detail, user_routines_raw, user_dept, output_path, empresa_name=""):
+    clusters_with_status = []
+    for cluster in tier3_clusters or []:
+        item = dict(cluster)
+        reused = str(item.get("reuses_existing_rule") or "").strip()
+        item["rule_status_label"] = f"Reaproveita {reused}" if reused else "Nova regra"
+        clusters_with_status.append(item)
+
     data = {
         "tier1": tier1,
         "tier2": tier2,
         "tier3": {
-            "clusters": tier3_clusters,
+            "clusters": clusters_with_status,
             "unclustered": list(unclustered) if unclustered else [],
         },
         "tier4": tier4,
@@ -84,6 +91,8 @@ body {{ font-family: 'Segoe UI', system-ui, sans-serif; background: #1a1a2e; col
 .cluster-name:hover {{ background: rgba(233, 69, 96, 0.1); }}
 .cluster-reason {{ font-size: 10px; color: #7f8c8d; margin-top: 3px; font-style: italic; }}
 .cluster-count {{ font-size: 10px; color: #7f8c8d; margin-top: 2px; }}
+.reuse-badge {{ display: inline-block; background: #27ae60; color: #fff; border-radius: 4px; padding: 1px 6px; font-size: 9px; font-weight: 800; margin-left: 6px; }}
+.new-badge {{ display: inline-block; background: #e67e22; color: #fff; border-radius: 4px; padding: 1px 6px; font-size: 9px; font-weight: 800; margin-left: 6px; }}
 
 .cluster-common {{ padding: 6px 14px; border-bottom: 1px solid #0f3460; max-height: 120px; overflow-y: auto; }}
 .cluster-common-title {{ font-size: 9px; color: #7f8c8d; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 3px; }}
@@ -193,6 +202,8 @@ let tier3Clusters = DATA.tier3.clusters.map(c => ({{
     type: c.type || '',
     routines: [...(c.routines || c.common_routines || [])],
     users: [...(c.users || [])],
+    reuses_existing_rule: c.reuses_existing_rule || '',
+    rule_status_label: c.rule_status_label || '',
 }}));
 let tier3Unassigned = [...DATA.tier3.unclustered];
 const USERS_DETAIL = DATA.users_detail;
@@ -319,6 +330,13 @@ function renderClusters() {{
             reasonHtml = '<div class="cluster-reason" title="' + escapeHtml(cluster.reason) + '">' + escapeHtml(shortReason) + '</div>';
         }}
 
+        let ruleBadge = '';
+        if (cluster.reuses_existing_rule) {{
+            ruleBadge = '<span class="reuse-badge" title="Regra existente no SYS_RULES">' + escapeHtml(cluster.rule_status_label || ('Reaproveita ' + cluster.reuses_existing_rule)) + '</span>';
+        }} else {{
+            ruleBadge = '<span class="new-badge" title="Nova regra necessaria">' + escapeHtml(cluster.rule_status_label || 'Nova regra') + '</span>';
+        }}
+
         let commonTags = '';
         let routines = (cluster.routines || []).filter(r => r && routineCode(r));
         if (routines.length > 0) {{
@@ -331,7 +349,7 @@ function renderClusters() {{
 
         column.innerHTML =
             '<div class="cluster-header">'
-            + '<div class="cluster-name" id="cluster-name-' + idx + '" ondblclick="editClusterName(' + idx + ')" title="Duplo clique para renomear">' + escapeHtml(cluster.name) + '</div>'
+            + '<div class="cluster-name" id="cluster-name-' + idx + '" ondblclick="editClusterName(' + idx + ')" title="Duplo clique para renomear">' + escapeHtml(cluster.name) + ruleBadge + '</div>'
             + reasonHtml
             + '<div class="cluster-count">' + cluster.users.length + ' usuarios aderentes</div>'
             + '</div>'
@@ -670,7 +688,7 @@ function renderTier4() {{
 function resetAll() {{
     if (!confirm('Voltar aos conjuntos funcionais originais da LLM? Alteracoes serao perdidas.')) return;
     tier3Clusters = TIER3_ORIG.clusters.map(c => ({{
-        name: c.name, reason: c.reason || '', type: c.type || '', routines: [...(c.routines || c.common_routines || [])], users: [...(c.users || [])],
+        name: c.name, reason: c.reason || '', type: c.type || '', routines: [...(c.routines || c.common_routines || [])], users: [...(c.users || [])], reuses_existing_rule: c.reuses_existing_rule || '', rule_status_label: c.rule_status_label || '',
     }}));
     tier3Unassigned = [...TIER3_ORIG.unclustered];
     renderTier3();
@@ -686,7 +704,7 @@ function saveAll() {{
         tier1: {{ routines: TIER1_ROUTINES, total_users: DATA.tier1.total_users }},
         tier2: TIER2_DATA.map(d => ({{ depto: d.depto, routines: d.routines.map(r => r.code), users: d.users }})),
         tier3: {{
-            clusters: tier3Clusters.map(c => ({{ name: c.name, reason: c.reason, type: c.type || '', routines: c.routines, users: deriveClusterUsers(c) }})),
+            clusters: tier3Clusters.map(c => ({{ name: c.name, reason: c.reason, type: c.type || '', routines: c.routines, users: deriveClusterUsers(c), rule_status_label: c.rule_status_label || (c.reuses_existing_rule ? 'Reaproveita ' + c.reuses_existing_rule : 'Nova regra'), ...(c.reuses_existing_rule ? {{ reuses_existing_rule: c.reuses_existing_rule }} : {{}}) }})),
             unclustered: Object.keys(USER_ROUTINES).filter(login => !tier3Clusters.some(c => deriveClusterUsers(c).includes(login))),
         }},
         tier4: tier4Users,

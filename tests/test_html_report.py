@@ -63,6 +63,30 @@ class HtmlReportPerformanceTest(unittest.TestCase):
         self.assertIn("Digite ao menos 2 caracteres", html)
         self.assertIn("clearTimeout(routineSearchTimer)", html)
 
+    def test_tier3_html_shows_reuse_or_new_rule_badges(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_path = Path(tmpdir) / "dashboard.html"
+            generate_cluster_html(
+                {"routines": [], "total_users": 2, "empresa": "TESTE"},
+                [],
+                [
+                    {"name": "P_CJ_COMPRAS", "reason": "Grupo de compras", "routines": ["MATA010"], "users": ["u1"], "reuses_existing_rule": "P_COMPRAS"},
+                    {"name": "P_CJ_NOVO", "reason": "Grupo novo", "routines": ["MATA020"], "users": ["u2"]},
+                ],
+                [],
+                {"users": []},
+                {"u1": {"name": "User 1", "login": "u1", "depto": "COMPRAS", "total_routines": 1}, "u2": {"name": "User 2", "login": "u2", "depto": "COMPRAS", "total_routines": 1}},
+                {"u1": ["MATA010"], "u2": ["MATA020"]},
+                {"u1": "COMPRAS", "u2": "COMPRAS"},
+                str(output_path),
+                "TESTE",
+            )
+
+            html = output_path.read_text(encoding="utf-8")
+
+        self.assertIn("Reaproveita P_COMPRAS", html)
+        self.assertIn("Nova regra", html)
+
 
 class UserDashboardHtmlTest(unittest.TestCase):
     def test_dashboard_uses_effective_access_status(self):
