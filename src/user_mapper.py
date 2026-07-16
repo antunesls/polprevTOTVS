@@ -8,6 +8,11 @@ BROWSE_FEATURES = [
     "Cod.Barra", "Copiar", "Retornar", "Prep.Doc.Saida", "Extra",
 ]
 
+USER_ACCESS_CODE_DESCRIPTIONS = {
+    "112": "Gerar rel. no servidor",
+    "121": "Usa impressora no server",
+}
+
 
 class UserMapper:
     def __init__(self, schema, conn):
@@ -24,6 +29,72 @@ class UserMapper:
         available = set(c.upper() for c in self.safe_cols(table))
         selected = [c for c in wanted_cols if c.upper() in available]
         return ", ".join(selected), selected
+
+    def _normalize_access(self, value):
+        c_value = str(value or "").strip().upper()
+
+        if c_value in ("1", "S", "Y", "T", "TRUE", "PERMITIDO"):
+            return "PERMITIDO"
+        if c_value in ("3", "N", "NEGADO", "BLOQUEADO"):
+            return "NEGADO"
+        if c_value in ("2", "NAO_PERMITIDO", "NÃO_PERMITIDO", "NAO PERMITIDO", "NÃO PERMITIDO"):
+            return "NAO_PERMITIDO"
+
+        return "SEM_REGRA"
+
+    def _access_rank(self, value):
+        return {
+            "NEGADO": 3,
+            "PERMITIDO": 2,
+            "NAO_PERMITIDO": 1,
+            "SEM_REGRA": 0,
+        }.get(self._normalize_access(value), 0)
+
+    def _prefer_candidate(self, current, candidate):
+        if current is None:
+            return candidate
+
+        n_current = self._normalize_access(current.get("access"))
+        n_candidate = self._normalize_access(candidate.get("access"))
+
+        if self._access_rank(n_candidate) > self._access_rank(n_current):
+            return candidate
+        if self._access_rank(n_candidate) < self._access_rank(n_current):
+            return current
+        if candidate.get("rule_name") == "DIRECT_USER":
+            return candidate
+        return current
+
+    def _merge_privilege_maps(self, group_privileges, direct_privileges):
+        privileges = {}
+
+        for source in (group_privileges or {}, direct_privileges or {}):
+            for func, features in source.items():
+                privileges.setdefault(func, {})
+                for feature, info in features.items():
+                    privileges[func][feature] = self._prefer_candidate(privileges[func].get(feature), info)
+
+        return privileges
+
+    def _resolve_routine_access(self, translated_features, has_group_default, disabled_by_acbrowse):
+        if disabled_by_acbrowse:
+            return "NEGADO", "ACBROWSE", "ACBROWSE"
+
+        best_access = "SEM_REGRA"
+        best_source = ""
+        best_reason = "NO_EXPLICIT_RULE"
+
+        for info in translated_features.values():
+            access = self._normalize_access(info.get("access"))
+            if self._access_rank(access) > self._access_rank(best_access):
+                best_access = access
+                best_source = info.get("rule_name", "")
+                best_reason = access
+
+        if best_access == "SEM_REGRA" and has_group_default:
+            return "NAO_PERMITIDO", "GROUP_DEFAULT", "GROUP_DEFAULT"
+
+        return best_access, best_source, best_reason
 
     def find_user(self, login):
         pk_candidates = ["USR_ID", "ID"]
@@ -140,6 +211,41 @@ class UserMapper:
         menu_ids = [row[menu_col] for row in rows]
         print(f"  Menus diretos do usuario (ativos): {len(menu_ids)} encontrados")
         return menu_ids, menu_col
+
+    def map_user_access_codes(self, user_id):
+        usr_col = self.resolve_col("SYS_USR_ACCESS", ["USR_ID", "USA_USR_ID", "USER_ID"])
+        code_col = self.resolve_col("SYS_USR_ACCESS", ["USR_CODACESSO", "USA_CODACESSO", "COD_ACESSO", "ACCESS_CODE"])
+        enabled_col = self.resolve_col("SYS_USR_ACCESS", ["USR_ACESSO", "USA_ACESSO", "ACESSO", "ACCESS"])
+        del_col = self.resolve_col("SYS_USR_ACCESS", ["D_E_L_E_T_"])
+
+        if not usr_col or not code_col:
+            return []
+
+        where = f"{usr_col} = ?"
+        params = [user_id]
+        if enabled_col:
+            where += f" AND {enabled_col} = ?"
+            params.append("T")
+        if del_col:
+            where += f" AND {del_col} = ?"
+            params.append(" ")
+
+        rows = fetch_dicts(self.conn,
+            f"SELECT {code_col}{', ' + enabled_col if enabled_col else ''} FROM SYS_USR_ACCESS WHERE {where}",
+            params)
+
+        result = []
+        for row in rows:
+            c_code = str(row.get(code_col) or "").strip()
+            if not c_code:
+                continue
+            result.append({
+                "code": c_code,
+                "enabled": str(row.get(enabled_col) or "T").strip().upper() == "T" if enabled_col else True,
+                "description": USER_ACCESS_CODE_DESCRIPTIONS.get(c_code, ""),
+            })
+
+        return sorted(result, key=lambda item: item["code"])
 
     def map_menu_tree(self, menu_ids, join_column=None):
         if not menu_ids:
@@ -570,7 +676,38 @@ class UserMapper:
                 menu_ids)
             user_ids = set(str(r[usr_col]) for r in rows)
 
-        return {"user_ids": sorted(user_ids), "routine": routine,
+        if not user_ids:
+            return {"user_ids": [], "routine": routine,
+                    "function_id": func_id, "menu_ids": menu_ids}
+
+        usr_pk = self.resolve_col("SYS_USR", ["USR_ID", "ID"])
+        usr_login = self.resolve_col("SYS_USR", ["USR_CODIGO", "USR_LOGIN", "LOGIN", "USR_USERNAME", "USR_COD"])
+        if not usr_pk or not usr_login:
+            return {"user_ids": sorted(user_ids), "routine": routine,
+                    "function_id": func_id, "menu_ids": menu_ids}
+
+        placeholders = ",".join("?" for _ in user_ids)
+        user_rows = fetch_dicts(self.conn,
+            f"SELECT {usr_pk}, {usr_login} FROM SYS_USR WHERE {usr_pk} IN ({placeholders})",
+            list(user_ids))
+
+        allowed_user_ids = set()
+        c_routine = str(routine or "").strip().upper()
+        for row in user_rows:
+            c_login = str(row.get(usr_login) or "").strip()
+            if not c_login:
+                continue
+            report = self.build_full_report(c_login)
+            if not report:
+                continue
+            for routine_info in report.get("routines_summary", []):
+                if str(routine_info.get("routine") or "").strip().upper() != c_routine:
+                    continue
+                if str(routine_info.get("effective_access") or "").strip().upper() == "PERMITIDO":
+                    allowed_user_ids.add(str(row.get(usr_pk)))
+                    break
+
+        return {"user_ids": sorted(allowed_user_ids), "routine": routine,
                 "function_id": func_id, "menu_ids": menu_ids}
 
     def build_full_report(self, login):
@@ -587,14 +724,13 @@ class UserMapper:
 
         acbrowse_overrides = self.map_system_profile(user["id"])
 
-        # build name->permission map for ACBROWSE entries
-        acbrowse_map = {}
-        for prog, entries in acbrowse_overrides.items():
-            for name, perm in entries.items():
-                key = name.strip()
-                acbrowse_map[key] = perm
+        def _get_program_overrides(menu):
+            c_menu_name = str(menu.get("menu_name") or "").strip()
+            if c_menu_name and c_menu_name in acbrowse_overrides:
+                return acbrowse_overrides[c_menu_name]
+            return {}
 
-        def _get_ancestor_status(item_id, by_id):
+        def _get_ancestor_status(item_id, by_id, program_overrides):
             cur = by_id.get(item_id)
             while cur:
                 father = cur.get("father_id")
@@ -604,10 +740,10 @@ class UserMapper:
                 if not cur:
                     return None
                 desc = (cur.get("description") or "").strip()
-                if desc in acbrowse_map and acbrowse_map[desc] == "D":
+                if desc in program_overrides and program_overrides[desc] == "D":
                     return "DISABLED"
-                if desc in acbrowse_map and acbrowse_map[desc] in ("E", "D"):
-                    return "ENABLED" if acbrowse_map[desc] == "E" else "DISABLED"
+                if desc in program_overrides and program_overrides[desc] in ("E", "D"):
+                    return "ENABLED" if program_overrides[desc] == "E" else "DISABLED"
             return None
 
         # build a flat lookup (item_id -> item) for ancestor walking
@@ -618,23 +754,23 @@ class UserMapper:
                 if iid:
                     all_items_by_id[iid] = item
 
-        def _get_effective_permission(item):
+        def _get_effective_permission(item, program_overrides):
             desc = (item.get("description") or "").strip()
             func = (item.get("function_code") or "").strip()
 
-            ancestor = _get_ancestor_status(item.get("item_id", ""), all_items_by_id)
+            ancestor = _get_ancestor_status(item.get("item_id", ""), all_items_by_id, program_overrides)
             folder_status = ancestor
 
-            if desc in acbrowse_map and acbrowse_map[desc] in ("D", "E"):
-                folder_status = "DISABLED" if acbrowse_map[desc] == "D" else "ENABLED"
+            if desc in program_overrides and program_overrides[desc] in ("D", "E"):
+                folder_status = "DISABLED" if program_overrides[desc] == "D" else "ENABLED"
 
             override_str = None
-            if func and func in acbrowse_map:
-                ov = acbrowse_map[func]
+            if func and func in program_overrides:
+                ov = program_overrides[func]
                 if ov not in ("D", "E"):
                     override_str = ov
-            elif desc in acbrowse_map:
-                ov = acbrowse_map[desc]
+            elif desc in program_overrides:
+                ov = program_overrides[desc]
                 if ov not in ("D", "E"):
                     override_str = ov
 
@@ -642,25 +778,22 @@ class UserMapper:
 
         print(f"\n  {C}[3/4]{R} Mapeando grupos e privilegios...")
         groups = self.map_user_groups(user["id"])
+        access_codes = self.map_user_access_codes(user["id"])
         group_ids = [g["group_id"] for g in groups]
         group_privileges = self.map_group_privileges(group_ids)
         direct_privileges = self.map_user_privileges_direct(user["id"])
 
-        all_privileges = dict(group_privileges)
-        for func, features in direct_privileges.items():
-            if func not in all_privileges:
-                all_privileges[func] = {}
-            all_privileges[func].update(features)
-
-        def translate_access(value):
-            mapping = {"1": "PERMITIDO", "3": "BLOQUEADO", "S": "PERMITIDO", "N": "BLOQUEADO",
-                       "Y": "PERMITIDO", "T": "PERMITIDO", "True": "PERMITIDO"}
-            return mapping.get(str(value).strip().upper(), str(value))
+        all_privileges = self._merge_privilege_maps(group_privileges, direct_privileges)
+        has_group_default = any(
+            str(group.get("group_id", "")).strip() == "*" or str(group.get("group_name", "")).strip() == "*"
+            for group in groups
+        )
 
         print(f"\n  {C}[4/4]{R} Consolidando relatorio...")
         routines_flat = []
         seen = set()
         for menu in menu_tree:
+            program_overrides = _get_program_overrides(menu)
             for item in menu.get("items", []):
                 func = item.get("function_code", "")
                 if not func or func in seen:
@@ -671,7 +804,7 @@ class UserMapper:
                 translated_features = {}
                 for feat, info in priv_for_func.items():
                     translated_features[feat] = {
-                        "access": translate_access(info["access"]),
+                        "access": self._normalize_access(info["access"]),
                         "access_raw": info["access"],
                         "rule_name": info["rule_name"],
                         "menu_oper": info.get("menu_oper"),
@@ -679,7 +812,7 @@ class UserMapper:
                     }
 
                 browse_features_available = item.get("browse_features", {})
-                acbrowse_status, acbrowse_override = _get_effective_permission(item)
+                acbrowse_status, acbrowse_override = _get_effective_permission(item, program_overrides)
                 disabled_by_acbrowse = (acbrowse_status in ("D", "DISABLED"))
 
                 if acbrowse_override and len(acbrowse_override) >= 10:
@@ -706,7 +839,7 @@ class UserMapper:
                                     op_features.append({
                                         "name": fname.strip() if fname else "",
                                         "action": (finfo.get("menu_def") or "").strip(),
-                                        "granted": translate_access(finfo["access"]),
+                                        "granted": self._normalize_access(finfo["access"]),
                                         "access_raw": finfo["access"],
                                     })
                         browse_permissions.append({
@@ -716,13 +849,23 @@ class UserMapper:
                             "features": op_features,
                         })
 
+                effective_access, decision_source, denial_reason = self._resolve_routine_access(
+                    translated_features,
+                    has_group_default,
+                    disabled_by_acbrowse,
+                )
+
                 routines_flat.append({
                     "routine": func,
                     "description": item.get("description", ""),
                     "menu_name": menu.get("menu_name", ""),
                     "module": menu.get("module", ""),
+                    "in_menu": True,
                     "features": translated_features,
                     "has_explicit_privilege": len(priv_for_func) > 0,
+                    "effective_access": effective_access,
+                    "decision_source": decision_source,
+                    "denial_reason": denial_reason,
                     "browse_permissions": browse_permissions,
                     "disabled_by_acbrowse": disabled_by_acbrowse,
                     "acbrowse_status": acbrowse_status,
@@ -734,19 +877,28 @@ class UserMapper:
                 translated_features = {}
                 for feat, info in features.items():
                     translated_features[feat] = {
-                        "access": translate_access(info["access"]),
+                        "access": self._normalize_access(info["access"]),
                         "access_raw": info["access"],
                         "rule_name": info["rule_name"],
                         "menu_oper": info.get("menu_oper"),
                         "menu_def": info.get("menu_def", ""),
                     }
+                effective_access, decision_source, denial_reason = self._resolve_routine_access(
+                    translated_features,
+                    has_group_default,
+                    False,
+                )
                 routines_flat.append({
                     "routine": func,
                     "description": "",
                     "menu_name": "",
                     "module": "",
+                    "in_menu": False,
                     "features": translated_features,
                     "has_explicit_privilege": True,
+                    "effective_access": effective_access,
+                    "decision_source": decision_source,
+                    "denial_reason": denial_reason,
                     "browse_permissions": [],
                     "disabled_by_acbrowse": False,
                     "acbrowse_status": None,
@@ -760,6 +912,7 @@ class UserMapper:
             "total_menus": len(menu_tree),
             "total_routines": len(routines_flat),
             "groups": groups,
+            "access_codes": access_codes,
             "menus": menu_tree,
             "routines_summary": routines_flat,
             "privileges_raw": all_privileges,

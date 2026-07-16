@@ -14,6 +14,7 @@ from src.discovery import discover_columns_for_tables, print_schema_summary
 from src.config import SCHEMA_TABLES, OUTPUT_DIR, DB_CONFIG, load_user_config, save_user_config
 import src.config as cfg
 from src.user_mapper import UserMapper
+from src.menu_generator import CanonicalMenuGenerator
 from src.privilege_generator import PrivilegeGenerator, save_report_json
 from src.dashboard import generate_html
 from src.file_logger import start_file_logging, stop_file_logging
@@ -261,13 +262,15 @@ def wizard_mapeamento(current_login="usr001"):
     gen_priv = False
     rule_name = ""
     gen_dash = False
+    gen_menu = False
+    menu_link_mode = "replace"
 
     wizard_box("WIZARD — Mapeamento de Acessos", "Passo a passo para mapear usuarios e gerar artefatos")
 
     # ETAPA 1 — Usuario
     while True:
         wizard_box("WIZARD — Mapeamento de Acessos")
-        wizard_step(1, 5, "Qual usuario deseja mapear?")
+        wizard_step(1, 7, "Qual usuario deseja mapear?")
         info("Digite o login do usuario ou ENTER para mapear TODOS os usuarios.")
         print()
         val = input(f"  {B}Usuario{R} [{D}{login} | ENTER = TODOS | X = cancelar{R}]: ").strip()
@@ -284,7 +287,7 @@ def wizard_mapeamento(current_login="usr001"):
     # ETAPA 2 — Gerar privilegios?
     while True:
         wizard_box("WIZARD — Mapeamento de Acessos")
-        wizard_step(2, 5, "Gerar script de privilegios (SQL)?")
+        wizard_step(2, 7, "Gerar script de privilegios (SQL)?")
         if is_org_mode:
             info("No modo organizacional, gera um SQL consolidado por camadas.")
             info("A geracao usa todos os usuarios, mesmo que um login especifico tenha sido informado.")
@@ -306,7 +309,7 @@ def wizard_mapeamento(current_login="usr001"):
             default_rule = f"ACESSOS_{login.upper()[:8]}"
         while True:
             wizard_box("WIZARD — Mapeamento de Acessos")
-            wizard_step(3, 5, "Nome do grupo de regras")
+            wizard_step(3, 7, "Nome do grupo de regras")
             info("Identificador do grupo de regras no Protheus (max 10 caracteres).")
             print()
             val = input(f"  {B}Nome da regra{R} [{D}{default_rule} | X = cancelar{R}]: ").strip()
@@ -321,12 +324,44 @@ def wizard_mapeamento(current_login="usr001"):
     else:
         rule_name = ""
 
-    # ETAPA 4 — Dashboard?
-    step_disp = "4/5" if gen_priv else "3/5"
-    step_num = 4 if gen_priv else 3
+    # ETAPA 4 — Menu canonico?
     while True:
         wizard_box("WIZARD — Mapeamento de Acessos")
-        wizard_step(step_num, 5, "Gerar dashboard HTML?")
+        wizard_step(4, 7, "Gerar menu canonico por modulo?")
+        info("Cria um menu unico por modulo com todas as rotinas encontradas.")
+        info("A exibicao final continua sendo controlada por privilegios.")
+        print()
+        result = wizard_prompt_yn("Gerar menu canonico + vinculos?", "N")
+        if result is None:
+            info("Wizard cancelado.")
+            return login
+        gen_menu = result
+        break
+
+    # ETAPA 5 — Modo do vinculo do menu
+    if gen_menu:
+        while True:
+            wizard_box("WIZARD — Mapeamento de Acessos")
+            wizard_step(5, 7, "Como tratar os vinculos atuais do modulo?")
+            info("S = substituir vinculos antigos do mesmo modulo")
+            info("A = manter os existentes e adicionar o menu canonico")
+            print()
+            val = input(f"  {B}Modo do vinculo{R} [{D}S = substituir | A = adicionar | X = cancelar{R}]: ").strip().upper()
+            if val == "X":
+                info("Wizard cancelado.")
+                return login
+            if not val or val == "S":
+                menu_link_mode = "replace"
+                break
+            if val == "A":
+                menu_link_mode = "add"
+                break
+            warn("Opcao invalida. Use S ou A.")
+
+    # ETAPA 6 — Dashboard?
+    while True:
+        wizard_box("WIZARD — Mapeamento de Acessos")
+        wizard_step(6, 7, "Gerar dashboard HTML?")
         info("Gera um dashboard grafico com a arvore de menus e permissoes.")
         print()
         result = wizard_prompt_yn("Gerar dashboard?", "N")
@@ -336,21 +371,23 @@ def wizard_mapeamento(current_login="usr001"):
         gen_dash = result
         break
 
-    # ETAPA 5 — Confirmacao
+    # ETAPA 7 — Confirmacao
     while True:
         wizard_box("WIZARD — Mapeamento de Acessos")
-        wizard_step(5, 5, "Confirmacao")
+        wizard_step(7, 7, "Confirmacao")
 
         user_disp = login if not batch else f"{Y}TODOS (batch){R}"
         if gen_priv and is_org_mode:
             priv_disp = f"{G}SIM{R} (SQL organizacional por camadas)"
         else:
             priv_disp = f"{G}SIM{R} ({rule_name})" if gen_priv else f"{D}NAO{R}"
+        menu_disp = f"{G}SIM{R} ({'substituir' if menu_link_mode == 'replace' else 'adicionar'})" if gen_menu else f"{D}NAO{R}"
         dash_disp = f"{G}SIM{R}" if gen_dash else f"{D}NAO{R}"
 
         wizard_summary("Resumo da operacao", [
             ("Usuario       ", user_disp),
             ("Gerar SQL     ", priv_disp),
+            ("Gerar Menu    ", menu_disp),
             ("Gerar Dashboard", dash_disp),
         ])
 
@@ -368,6 +405,20 @@ def wizard_mapeamento(current_login="usr001"):
     cls()
     print(BANNER)
 
+    if gen_menu and not batch:
+        warn("Menus canonicos sao gerados com base em TODOS os usuarios ativos.")
+        info(f"O login informado ({login}) sera usado apenas para o mapeamento individual solicitado.")
+        report = None
+        if gen_priv or gen_dash:
+            report, schema, login_result = run_mapping(login)
+            if report:
+                if gen_priv:
+                    run_generate_privileges(report, schema, login_result, rule_name=rule_name)
+                if gen_dash:
+                    run_dashboard(login_result)
+        run_batch(gen_priv=False, rule_name="", gen_dash=False, gen_menu=True, menu_link_mode=menu_link_mode)
+        return login
+
     if is_org_mode and gen_priv:
         if not batch:
             warn("Modo organizacional ativo: o SQL sera gerado a partir de TODOS os usuarios.")
@@ -384,12 +435,14 @@ def wizard_mapeamento(current_login="usr001"):
         return login
 
     if batch:
-        run_batch(gen_priv=gen_priv, rule_name=rule_name, gen_dash=gen_dash)
+        run_batch(gen_priv=gen_priv, rule_name=rule_name, gen_dash=gen_dash, gen_menu=gen_menu, menu_link_mode=menu_link_mode)
     else:
         report, schema, login_result = run_mapping(login)
         if report:
             if gen_priv:
                 run_generate_privileges(report, schema, login_result, rule_name=rule_name)
+            if gen_menu:
+                run_generate_canonical_menus([report], schema, filename=f"{login}_canonical_menus.sql", link_mode=menu_link_mode)
             if gen_dash:
                 run_dashboard(login_result)
 
@@ -1040,6 +1093,20 @@ def run_dashboard(login):
     info(f"Abra o arquivo no navegador para visualizar.")
 
 
+def run_generate_canonical_menus(reports, schema, filename="canonical_menus.sql", link_mode="replace", conn=None):
+    if not reports:
+        warn("Sem dados de mapeamento para gerar menus canonicos.")
+        return
+
+    section("MENUS")
+    info("Gerando script SQL de menus canonicos...")
+    generator = CanonicalMenuGenerator(reports, schema, conn=conn)
+    sql = generator.generate_sql(link_mode=link_mode)
+    sql_path = generator.save_sql(sql, filename)
+    ok()
+    success(f"Script de menus salvo em: {C['bold']}{sql_path}{C['reset']}")
+
+
 def spin(text, duration=1.0):
     i = 0
     end = time.time() + duration
@@ -1050,7 +1117,7 @@ def spin(text, duration=1.0):
         i += 1
 
 
-def run_batch(choice=None, gen_priv=False, rule_name="", gen_dash=False):
+def run_batch(choice=None, gen_priv=False, rule_name="", gen_dash=False, gen_menu=False, menu_link_mode="replace"):
     if choice is not None:
         gen_priv = (choice == "2")
         gen_dash = (choice == "3")
@@ -1086,6 +1153,7 @@ def run_batch(choice=None, gen_priv=False, rule_name="", gen_dash=False):
             success_count = 0
             fail_count = 0
             total = len(users)
+            all_reports = []
 
             print(f"\n  {C['cyan']}{chr(0x250C)}{'─' * 45}{chr(0x2510)}{C['reset']}")
 
@@ -1105,6 +1173,7 @@ def run_batch(choice=None, gen_priv=False, rule_name="", gen_dash=False):
 
                     json_path = save_report_json(report, login)
                     info(f"  JSON salvo: {json_path}")
+                    all_reports.append(report)
 
                     if gen_priv:
                         default_rule = rule_name if rule_name else f"ACESSOS_{login.upper()[:8]}"
@@ -1131,6 +1200,15 @@ def run_batch(choice=None, gen_priv=False, rule_name="", gen_dash=False):
             summary_ok = f"{C['green']}Sucesso: {success_count}{C['reset']}"
             summary_fail = f"{C['red']}Falhas: {fail_count}{C['reset']}"
             print(f"  Processados: {total} | {summary_ok} | {summary_fail}")
+
+            if gen_menu and all_reports:
+                run_generate_canonical_menus(
+                    all_reports,
+                    schema,
+                    filename="canonical_menus.sql",
+                    link_mode=menu_link_mode,
+                    conn=conn,
+                )
 
     except Exception as e:
         fail(str(e))

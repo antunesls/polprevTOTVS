@@ -13,6 +13,7 @@ Ferramenta para mapear os acessos de um usuário do Protheus ERP, listando menus
 | **1. Mapear acessos** | Conecta ao banco, descobre a estrutura das tabelas, mapeia menus, rotinas e funcionalidades do usuário. Gera `output/{login}_access.json` |
 | **2. Mapear + Privilégios** | Além do mapeamento, gera script SQL para criar um novo grupo de privilégios (`SYS_RULES`) baseado nos acessos do usuário. Gera `output/{login}_privileges.sql` |
 | **3. Mapear + Dashboard** | Mapeia e gera dashboard HTML com gráficos, árvore de menu e tabela pesquisável. Gera `output/dashboard.html` |
+| **4. Menu canônico por módulo** | Gera SQL para criar um menu único por módulo em `MPMENU_*` com todas as rotinas do módulo e vincular usuários em `SYS_USR_MODULE`. Gera `output/canonical_menus.sql` |
 
 ### Destaques do mapeamento
 
@@ -21,6 +22,31 @@ Ferramenta para mapear os acessos de um usuário do Protheus ERP, listando menus
 - **Funcionalidades de Browse**: parse do `I_ACCESS` (10 posições) e cross-reference com `RL__MENUOPER` do `SYS_RULES_FEATURES`
 - **Overrides de perfil**: leitura do `MP_SYSTEM_PROFILE` (ACBROWSE) para bloqueios por usuário — pastas com status `D` desabilitam toda a subárvore
 - **Privilégios**: mapeamento de regras por grupo (`SYS_RULES_GRP_RULES`) e por usuário (`SYS_RULES_USR_RULES`)
+- **Acesso efetivo**: o relatório separa rotina presente no menu de rotina efetivamente liberada, considerando privilégio explícito, Grupo Default e bloqueios por `ACBROWSE`
+- **Códigos SYS_USR_ACCESS**: o relatório lista os códigos ativos do usuário em `SYS_USR_ACCESS` quando a tabela existir, usando `USR_ACESSO = 'T'`
+
+### Semântica do relatório
+
+- `menus` e `routines_summary` continuam mostrando a estrutura encontrada para o usuário.
+- `in_menu = true` indica apenas que a rotina foi localizada em algum menu vinculado ao usuário.
+- `effective_access` indica a decisão final de acesso da rotina:
+  - `PERMITIDO`
+  - `NEGADO`
+  - `NAO_PERMITIDO`
+  - `SEM_REGRA`
+- `decision_source` identifica a regra que venceu a consolidação.
+- `denial_reason` explica o motivo principal quando a rotina não está liberada, por exemplo `GROUP_DEFAULT`, `NO_EXPLICIT_RULE` ou `ACBROWSE`.
+- Quando o usuário pertence ao `Grupo Default` (`*`), rotinas sem privilégio explícito passam a ser tratadas como `NAO_PERMITIDO`.
+- `access_codes` lista os códigos ativos de `SYS_USR_ACCESS` para diagnóstico operacional do usuário.
+- `SYS_USR_ACCESS` ainda nao altera o `effective_access` de rotina. Ele permanece como camada diagnóstica separada, porque seus códigos representam permissões sistêmicas e não a matriz de privilégio por rotina/menu.
+
+### Fontes do acesso
+
+- **Acesso efetivo por rotina**: determinado pela consolidacao entre menu, `SYS_RULES*`, grupos, `Grupo Default` e bloqueios de `ACBROWSE`.
+- **Acesso sistêmico do usuário**: representado por códigos ativos em `SYS_USR_ACCESS`, como permissões operacionais do cadastro do usuário.
+- Esses dois conceitos aparecem no mesmo relatório, mas não se substituem:
+  - `effective_access` responde se a rotina ficou liberada ou não.
+  - `access_codes` responde quais códigos sistêmicos estão ativos para o usuário.
 
 ---
 
@@ -38,8 +64,13 @@ polprevTOTVS/
 │   ├── discovery.py                # Descoberta de colunas via INFORMATION_SCHEMA
 │   ├── user_mapper.py              # Mapeamento principal (menus, rotinas, privilégios, ACBROWSE)
 │   ├── privilege_generator.py      # Geração de script SQL para SYS_RULES
+│   ├── menu_generator.py           # Geração de menu canônico por módulo e vínculos
 │   ├── dashboard.py                # Geração de dashboard HTML (Chart.js)
 │   └── diagnose_columns.py         # Diagnóstico de colunas vs candidatos
+├── tools/                          # Utilitários manuais e scripts auxiliares
+│   ├── analyze_acbrowse.py         # Inspeção ad hoc de overrides ACBROWSE
+│   ├── check_disabled.py           # Checagem pontual de permissões em relatório JSON
+│   └── gen_dab_config.py           # Geração manual de config do Data API Builder
 └── output/                         # (gerado) Relatórios e dashboard
     ├── {login}_access.json
     ├── {login}_privileges.sql
@@ -54,7 +85,7 @@ polprevTOTVS/
 |---|--------|-----------|----------------|
 | 1 | `SYS_USR` | Usuários do sistema | Buscar usuário por `USR_CODIGO`, obter `USR_ID` |
 | 2 | `SYS_USR_MODULE` | Módulos/menus atribuídos ao usuário | Filtrar por `USR_ACESSO = 'T'` para obter módulos permitidos; `USR_MODULO` → `M_MODULE` |
-| 3 | `SYS_USR_ACCESS` | Códigos de acesso por usuário | Controle adicional de acesso (`USR_CODACESSO`) — não usado ativamente no mapeamento |
+| 3 | `SYS_USR_ACCESS` | Códigos de acesso por usuário | Diagnóstico dos códigos ativos (`USR_CODACESSO`) com `USR_ACESSO = 'T'`; não altera `effective_access` |
 | 4 | `SYS_USR_GROUPS` | Associação usuário → grupo | Obter `USR_GRUPO` para buscar privilégios do grupo |
 | 5 | `SYS_GRP_GROUP` | Grupos de usuários | Nome do grupo (`GR__NOME`) via `GR__ID` |
 | 6 | `SYS_RULES` | Regras de privilégio | `RL__CODIGO` (nome), `RL__DESCRI` (descrição) |
@@ -67,6 +98,15 @@ polprevTOTVS/
 | 13 | `MPMENU_FUNCTION` | Funções/rotinas | `F_ID` → `F_FUNCTION` (ex: MATA010) |
 | 14 | `MPMENU_I18N` | Descrições internacionalizadas | `N_DESC` (descrição), `N_LANG` (idioma), `N_PAREN_ID` → `I_ID` |
 | 15 | `MP_SYSTEM_PROFILE` | Perfil do sistema | `P_TYPE = 'ACBROWSE'` — overrides de funcionalidades por usuário em `P_DEFS` (binário) |
+
+### Menu canônico por módulo
+
+- O wizard pode gerar um **menu único por módulo** contendo todas as rotinas encontradas naquele módulo.
+- O script cria registros em `MPMENU_MENU`, `MPMENU_ITEM` e `MPMENU_I18N`.
+- Os vínculos em `SYS_USR_MODULE` podem ser gerados em dois modos:
+  - `substituir`: remove os vínculos existentes do mesmo módulo antes de incluir o canônico
+  - `adicionar`: mantém os vínculos atuais e adiciona o canônico quando ainda não existir
+- A exibição final das rotinas continua sendo controlada por privilégios (`SYS_RULES*`) e pelo perfil `ACBROWSE`.
 
 ### Colunas principais por tabela
 
@@ -267,7 +307,11 @@ output/
       "routine": "MATA010",
       "description": "Produtos",
       "menu_name": "SIGACOM",
+      "in_menu": true,
       "has_explicit_privilege": false,
+      "effective_access": "NAO_PERMITIDO",
+      "decision_source": "GROUP_DEFAULT",
+      "denial_reason": "GROUP_DEFAULT",
       "disabled_by_acbrowse": true,
       "browse_permissions": [
         { "pos": 0, "menu_oper": 1, "available": false, "features": [] },

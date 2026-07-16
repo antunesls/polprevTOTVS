@@ -178,6 +178,18 @@ class Tier3FunctionalSetsTest(unittest.TestCase):
         self.assertEqual(result[0], {"code": "ETQ001", "permissions": ["Alterar", "Visualizar"]})
         self.assertEqual(result[1], {"code": "ETQ002", "permissions": []})
 
+    def test_user_routine_items_ignore_non_effective_routines(self):
+        report = {
+            "user": "joao",
+            "routines_summary": [
+                {"routine": "MATA010", "effective_access": "PERMITIDO", "features": {"Visualizar": {"access": "PERMITIDO"}}},
+                {"routine": "MATA020", "effective_access": "NAO_PERMITIDO", "features": {"Visualizar": {"access": "PERMITIDO"}}},
+                {"routine": "MATA030", "effective_access": "NEGADO", "features": {"Visualizar": {"access": "PERMITIDO"}}},
+            ],
+        }
+
+        self.assertEqual(user_routine_items(report), [{"code": "MATA010", "permissions": ["Visualizar"]}])
+
     def test_builds_equivalent_profile_groups_from_same_residual_access(self):
         reports = [
             {

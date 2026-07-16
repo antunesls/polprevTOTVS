@@ -1,7 +1,10 @@
 import tempfile
 import unittest
+import json
 from pathlib import Path
+from unittest.mock import patch
 
+from src.dashboard import generate_html
 from src.html_report import generate_cluster_html
 
 
@@ -59,6 +62,61 @@ class HtmlReportPerformanceTest(unittest.TestCase):
         self.assertIn("const ROUTINE_USER_COUNT = buildRoutineUserCount()", html)
         self.assertIn("Digite ao menos 2 caracteres", html)
         self.assertIn("clearTimeout(routineSearchTimer)", html)
+
+
+class UserDashboardHtmlTest(unittest.TestCase):
+    def test_dashboard_uses_effective_access_status(self):
+        report = {
+            "user": "usr001",
+            "user_id": "000001",
+            "total_menus": 1,
+            "total_routines": 2,
+            "groups": [{"group_id": "*", "group_name": "*"}],
+            "access_codes": [
+                {"code": "112", "enabled": True, "description": "Gerar rel. no servidor"},
+                {"code": "121", "enabled": True, "description": "Usa impressora no server"},
+            ],
+            "menus": [{"items": []}],
+            "routines_summary": [
+                {
+                    "routine": "MATA010",
+                    "description": "Produtos",
+                    "menu_name": "SIGACOM",
+                    "has_explicit_privilege": True,
+                    "effective_access": "PERMITIDO",
+                    "browse_permissions": [],
+                    "disabled_by_acbrowse": False,
+                },
+                {
+                    "routine": "MATA020",
+                    "description": "Fornecedores",
+                    "menu_name": "SIGACOM",
+                    "has_explicit_privilege": False,
+                    "effective_access": "NAO_PERMITIDO",
+                    "denial_reason": "GROUP_DEFAULT",
+                    "browse_permissions": [],
+                    "disabled_by_acbrowse": False,
+                },
+            ],
+            "privileges_raw": {},
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            report_path = Path(tmpdir) / "usr001_access.json"
+            report_path.write_text(json.dumps(report), encoding="utf-8")
+
+            with patch("src.dashboard.OUTPUT_DIR", tmpdir):
+                output_path = generate_html(str(report_path))
+
+            html = Path(output_path).read_text(encoding="utf-8")
+
+        self.assertIn("LIBERADO", html)
+        self.assertIn("NAO PERMITIDO", html)
+        self.assertIn("Codigos SYS_USR_ACCESS", html)
+        self.assertIn("Gerar rel. no servidor", html)
+        self.assertIn("Usa impressora no server", html)
+        self.assertIn(">2</div><div class=\"kpi-label\">Codigos ativos</div>", html)
+        self.assertNotIn(">OK<", html)
 
 
 if __name__ == "__main__":

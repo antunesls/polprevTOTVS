@@ -70,6 +70,7 @@ def generate_html(report_path):
     total_menus = report.get("total_menus", 0)
     total_routines = report.get("total_routines", 0)
     groups = report.get("groups", [])
+    access_codes = report.get("access_codes", [])
     menus = report.get("menus", [])
     routines = report.get("routines_summary", [])
     privileges = report.get("privileges_raw", {})
@@ -77,6 +78,7 @@ def generate_html(report_path):
     items_with_func = sum(1 for r in routines if r.get("routine", "").strip())
     items_no_func = total_routines - items_with_func
     groups_count = len(groups)
+    access_codes_count = len(access_codes)
 
     prefix_counts = Counter()
     for r in routines:
@@ -90,7 +92,8 @@ def generate_html(report_path):
     pr_no = total_routines - pr_yes
 
     acbrowse_disabled_count = sum(1 for r in routines if r.get("disabled_by_acbrowse", False))
-    saldo = total_routines - acbrowse_disabled_count
+    effective_allowed_count = sum(1 for r in routines if str(r.get("effective_access", "")).strip().upper() == "PERMITIDO")
+    saldo = effective_allowed_count
 
     tree_roots = []
     for menu in menus:
@@ -99,9 +102,36 @@ def generate_html(report_path):
 
     tree_html = _render_tree(tree_roots)
 
+    access_codes_html = '<p class="muted">Nenhum codigo ativo em SYS_USR_ACCESS encontrado.</p>'
+    if access_codes:
+        parts = []
+        for item in access_codes:
+            code = (item.get("code") or "").strip()
+            desc = (item.get("description") or "").strip()
+            label = f"{code}"
+            if desc:
+                label += f" - {desc}"
+            parts.append(f'<span class="access-chip">{label}</span>')
+        access_codes_html = "".join(parts)
+
     table_rows = ""
     browse_routines_count = 0
     acbrowse_disabled_count = 0
+
+    def render_status(routine):
+        c_effective = str(routine.get("effective_access", "")).strip().upper()
+        c_reason = str(routine.get("denial_reason", "")).strip().upper()
+
+        if c_effective == "PERMITIDO":
+            return '<span class="status-ok">LIBERADO</span>'
+        if c_effective == "NEGADO":
+            if c_reason == "ACBROWSE":
+                return '<span class="status-blocked">BLOQ. PERFIL</span>'
+            return '<span class="status-blocked">NEGADO</span>'
+        if c_effective == "NAO_PERMITIDO":
+            return '<span class="status-warn">NAO PERMITIDO</span>'
+        return '<span class="status-neutral">SEM REGRA</span>'
+
     for i, r in enumerate(routines):
         code = (r.get("routine") or "").strip()
         desc = (r.get("description") or "").strip()
@@ -111,9 +141,7 @@ def generate_html(report_path):
         if disabled:
             acbrowse_disabled_count += 1
 
-        status_html = '<span class="status-ok">OK</span>'
-        if disabled:
-            status_html = '<span class="status-blocked">BLOQ</span>'
+        status_html = render_status(r)
 
         browse_html = ""
         bp = r.get("browse_permissions", [])
@@ -155,7 +183,7 @@ header {{ text-align:center; margin-bottom:32px; }}
 header h1 {{ font-size:28px; color:#58a6ff; }}
 header p {{ color:#8b949e; margin-top:4px; }}
 
-.kpi-grid {{ display:grid; grid-template-columns: repeat(5,1fr); gap:16px; margin-bottom:32px; }}
+    .kpi-grid {{ display:grid; grid-template-columns: repeat(6,1fr); gap:16px; margin-bottom:32px; }}
 .kpi-card {{ background:#161b22; border:1px solid #30363d; border-radius:12px; padding:20px; text-align:center; }}
 .kpi-card .kpi-value {{ font-size:36px; font-weight:700; }}
 .kpi-card .kpi-label {{ font-size:13px; color:#8b949e; margin-top:4px; }}
@@ -205,8 +233,13 @@ tr:hover {{ background:#1c2129; }}
 
 .status-ok {{ background:#0d2818; color:#3fb950; padding:2px 8px; border-radius:4px; font-size:11px; font-weight:600; }}
 .status-blocked {{ background:#2d1d1d; color:#ff7b72; padding:2px 8px; border-radius:4px; font-size:11px; font-weight:600; }}
+.status-warn {{ background:#3a2c10; color:#e3b341; padding:2px 8px; border-radius:4px; font-size:11px; font-weight:600; }}
+.status-neutral {{ background:#21262d; color:#8b949e; padding:2px 8px; border-radius:4px; font-size:11px; font-weight:600; }}
 .row-disabled {{ opacity:0.5; }}
 .row-disabled:hover {{ opacity:0.7; background:#1c2129; }}
+
+.access-chip {{ display:inline-block; margin:4px 6px 0 0; padding:6px 10px; border-radius:999px; background:#0d1117; border:1px solid #30363d; color:#c9d1d9; font-size:12px; }}
+.muted {{ color:#8b949e; font-size:13px; }}
 
 .footer {{ text-align:center; color:#484f58; font-size:12px; margin-top:32px; }}
 </style>
@@ -224,6 +257,7 @@ tr:hover {{ background:#1c2129; }}
   <div class="kpi-card c3"><div class="kpi-value">{saldo}</div><div class="kpi-label">Rotinas Permitidas</div></div>
   <div class="kpi-card c4"><div class="kpi-value">{groups_count}</div><div class="kpi-label">Grupos</div></div>
   <div class="kpi-card c5"><div class="kpi-value">{acbrowse_disabled_count}</div><div class="kpi-label">Bloqueadas (Perfil)</div></div>
+  <div class="kpi-card c1"><div class="kpi-value">{access_codes_count}</div><div class="kpi-label">Codigos ativos</div></div>
 </div>
 
 <div class="charts-grid">
@@ -240,6 +274,11 @@ tr:hover {{ background:#1c2129; }}
 <div class="section">
   <h2>Arvore de Menu</h2>
   <ul class="tree open">{tree_html}  </ul>
+</div>
+
+<div class="section">
+  <h2>Codigos SYS_USR_ACCESS</h2>
+  {access_codes_html}
 </div>
 
 <div class="section">

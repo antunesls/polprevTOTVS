@@ -31,6 +31,8 @@ def routine_permissions(routine):
 def user_routine_items(report):
     items = []
     for routine in report.get("routines_summary", []):
+        if str(routine.get("effective_access", "PERMITIDO")).strip().upper() != "PERMITIDO":
+            continue
         code = routine_code(routine.get("routine"))
         if code:
             items.append({"code": code, "permissions": routine_permissions(routine)})
