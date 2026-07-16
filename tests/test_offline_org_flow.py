@@ -77,13 +77,28 @@ class OrganizationalDashboardFlowTest(unittest.TestCase):
                  patch("run.print_schema_summary"), \
                  patch("run.UserMapper", FakeMapper), \
                  patch("src.organizational_privileges.OrganizationalPrivilegeGenerator", FakeGen), \
-                 patch("run._generate_org_dashboards") as dashboard_helper:
+                 patch("src.html_report.generate_cluster_html") as cluster_helper, \
+                 patch("src.department_html_report.generate_department_html") as dept_helper, \
+                 patch("webbrowser.open"), \
+                 patch("run.generate_department_validation_reports") as validation_helper:
                 mock_get_connection.return_value.__enter__.return_value = object()
                 mock_get_connection.return_value.__exit__.return_value = False
 
                 run.run_batch_organizational("2")
 
-                dashboard_helper.assert_called_once()
+                cluster_helper.assert_called_once()
+                dept_helper.assert_called_once()
+                validation_helper.assert_called_once()
+
+    def test_main_menu_option_triggers_department_validation_report(self):
+        with patch("run.cfg.PRIVILEGE_MODE", "organizational_layer"), \
+             patch("run.menu", side_effect=["6", "0"]), \
+             patch("run.wait_enter"), \
+             patch("run.cls"), \
+             patch("run.run_department_validation_only") as report_helper:
+            run.main()
+
+        report_helper.assert_called_once()
 
 
 if __name__ == "__main__":

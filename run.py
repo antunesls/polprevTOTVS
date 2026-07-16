@@ -17,6 +17,7 @@ from src.user_mapper import UserMapper
 from src.menu_generator import CanonicalMenuGenerator
 from src.privilege_generator import PrivilegeGenerator, save_report_json
 from src.dashboard import generate_html
+from src.department_validation_report import generate_department_validation_reports
 from src.file_logger import start_file_logging, stop_file_logging
 from src.tier3 import apply_department_canonicalization, build_department_analysis, build_equivalent_profile_groups, build_tier4_users, load_existing_rules, normalize_tier3_sets, routine_permissions, user_routine_items
 
@@ -805,12 +806,67 @@ def _generate_org_dashboards(all_reports, tier1_routines, tier2_data, tier3_clus
         build_department_analysis(all_reports, existing_rules=existing_rules),
         dept_html_path, cfg.EMPRESA_NAME,
     )
+    validation_dir = os.path.join(OUTPUT_DIR, "departamentos")
+    validation_paths = generate_department_validation_reports(all_reports, validation_dir, cfg.EMPRESA_NAME)
     import webbrowser
     webbrowser.open(f"file://{os.path.abspath(html_path)}")
     print(f"  {G}Dashboard gerado:{R} {html_path}")
     print(f"  {G}Dashboard por departamento gerado:{R} {dept_html_path}")
+    print(f"  {G}Relatorios por departamento gerados:{R} {validation_dir} ({len(validation_paths)} arquivos)")
     print(f"  {CY}O navegador foi aberto com as 4 camadas.{R}")
     print()
+
+
+def run_department_validation_only():
+    if not cfg.EMPRESA_NAME:
+        warn("Nome da empresa nao definido. Configure em Parametrizacao -> Nome da empresa.")
+        return
+
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+    section("CONEXAO")
+    spin("Conectando ao banco MSSQL...", 0.6)
+    try:
+        with get_connection() as conn:
+            ok("Conectado com sucesso!")
+
+            section("DISCOVERY")
+            spin("Descobrindo estrutura das tabelas...", 1.0)
+            schema = discover_columns_for_tables(SCHEMA_TABLES, conn)
+            ok()
+            print_schema_summary(schema)
+
+            section("RELATORIO POR DEPARTAMENTO")
+            mapper = UserMapper(schema, conn)
+            users = mapper.list_non_blocked_users()
+            if not users:
+                warn("Nenhum usuario nao bloqueado encontrado.")
+                return
+
+            all_reports = []
+            for user_info in users:
+                login = user_info["login"]
+                report = mapper.build_full_report(login)
+                if report is not None:
+                    all_reports.append(report)
+
+            if not all_reports:
+                warn("Nenhum relatorio gerado. Abortando.")
+                return
+
+            filtered_reports = [rep for rep in all_reports if len(rep.get("routines_summary", [])) > 0]
+            if not filtered_reports:
+                warn("Nenhum usuario com rotinas. Abortando.")
+                return
+
+            filtered_reports = apply_department_canonicalization(filtered_reports)
+            output_dir = os.path.join(OUTPUT_DIR, "departamentos")
+            generated_paths = generate_department_validation_reports(filtered_reports, output_dir, cfg.EMPRESA_NAME)
+            success(f"Relatorios por departamento gerados em: {C['bold']}{output_dir}{C['reset']}")
+            info(f"Arquivos gerados: {len(generated_paths)}")
+
+    except Exception as e:
+        fail(str(e))
 
 
 # ══════════════════════════════════════════════
@@ -957,6 +1013,8 @@ def menu():
     if is_org:
         print(row(f"{L}║{R}  {B}3{R} │ {W}Camadas organizacionais{R}"))
         print(row(f"{L}║{R}    │ {D}Analisar, gerar SQL e configurar modo{R}"))
+        print(row(f"{L}║{R}  {B}6{R} │ {W}Relatorio por departamento{R}"))
+        print(row(f"{L}║{R}    │ {D}HTML por usuario pronto para PDF{R}"))
 
     print(row(f"{L}║{R}  {D}{'─' * (BOX - 3)}{R}"))
     print(row(f"{L}║{R}  {B}4{R} │ {W}Parametrizacao{R}"))
@@ -2789,6 +2847,12 @@ def main():
 
         elif choice == "5":
             menu_validacao_api()
+
+        elif choice == "6":
+            if is_org:
+                run_department_validation_only()
+            else:
+                print(f"\n  {C['red']}Opcao invalida!{C['reset']}\n")
 
         else:
             print(f"\n  {C['red']}Opcao invalida!{C['reset']}\n")

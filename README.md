@@ -207,12 +207,28 @@ As 10 posições do `I_ACCESS` correspondem às operações do menu (ordem de ex
 
 O dashboard (`output/dashboard.html`) é autocontido e inclui:
 
-- **5 KPI cards**: Menus, Rotinas, Rotinas Permitidas, Grupos, Bloqueadas
+- **6 KPI cards**: Menus, Rotinas, Rotinas Permitidas, Grupos, Bloqueadas, Códigos ativos
 - **Gráfico de barras**: Top 15 prefixos de função (MATA, COMS, etc.)
 - **Gráfico doughnut**: Acessíveis vs Bloqueadas (Perfil)
 - **Árvore de menu**: Hierarquia colapsável com `father_id`
 - **Tabela pesquisável**: 146 rotinas com Status, Privilégio e Browse OPs
 - **Tema escuro**: Estilo GitHub Dark
+
+## Relatorio por Departamento
+
+O fluxo organizacional tambem gera relatorios HTML prontos para impressao/PDF em:
+
+- `output/departamentos/{DEPARTAMENTO}.html`
+
+Cada arquivo contem:
+
+- 1 departamento por arquivo
+- 1 pagina por usuario
+- rotinas explicitamente `PERMITIDO`
+- para usuarios fora do `Grupo Default`, tambem inclui rotinas em `SEM_REGRA` quando estiverem no menu e sem bloqueio por `ACBROWSE`, refletindo o modelo tradicional de negacao por excecao
+- grupos e codigos ativos de `SYS_USR_ACCESS`
+
+Para exportar em PDF, abra o HTML do departamento desejado no navegador e use `Ctrl+P` > `Salvar como PDF`.
 
 ---
 
@@ -236,6 +252,7 @@ python run.py
 ║  1 │ Apenas mapear acessos              ║
 ║  2 │ Mapear + Gerar privilégios         ║
 ║  3 │ Mapear + Dashboard HTML            ║
+║  6 │ Relatório por departamento         ║
 ║  0 │ Sair                               ║
 ╚══════════════════════════════════════════╝
 
@@ -243,6 +260,8 @@ Opcao: 1
 
 Usuario [usr001]: ← ENTER para padrão ou digite outro
 ```
+
+No modo `organizational_layer`, a opção `6` gera apenas os arquivos em `output/departamentos/`, sem depender do dashboard interativo.
 
 ---
 
@@ -289,7 +308,10 @@ SCHEMA_TABLES = [
 output/
 ├── usr001_access.json       # Relatório completo (rotinas, features, browse permissions)
 ├── usr001_privileges.sql    # Script SQL para criar regra no SYS_RULES
-└── dashboard.html           # Dashboard gráfico interativo
+├── dashboard.html           # Dashboard gráfico interativo
+└── departamentos/
+    ├── COMERCIAL.html       # Relatório por usuário pronto para impressão/PDF
+    └── CONTROLADORIA.html
 ```
 
 ### Estrutura do JSON
