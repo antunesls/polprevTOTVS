@@ -764,9 +764,76 @@ def _run_org_analysis_with_reports(all_reports):
         warn("Opcao invalida. Conjuntos funcionais descartados.")
 
 
-def _generate_org_dashboards(all_reports, tier1_routines, tier2_data, tier3_clusters, tier3_unclustered, tier4_users):
+def _load_existing_links(conn):
+    from src.database import fetch_dicts
+    links = {}
+    try:
+        usr_rows = fetch_dicts(conn, "SELECT USER_ID, USR_RL_ID FROM SYS_RULES_USR_RULES")
+        rul_rows = fetch_dicts(conn, "SELECT RL__ID, RL__CODIGO FROM SYS_RULES")
+        usr_info_rows = fetch_dicts(conn, "SELECT USR_ID, USR_CODIGO FROM SYS_USR")
+    except Exception:
+        return links
+
+    rule_id_to_name = {}
+    for row in rul_rows:
+        rule_id_to_name[str(row.get("RL__ID", "")).strip()] = str(row.get("RL__CODIGO", "")).strip()
+
+    user_id_to_login = {}
+    for row in usr_info_rows:
+        user_id_to_login[str(row.get("USR_ID", "")).strip()] = str(row.get("USR_CODIGO", "")).strip()
+
+    for row in usr_rows:
+        rule_id = str(row.get("USR_RL_ID", "")).strip()
+        user_id = str(row.get("USER_ID", "")).strip()
+        rule_name = rule_id_to_name.get(rule_id, "")
+        if not rule_name:
+            continue
+        links.setdefault(rule_name, {"linked_users": [], "linked_groups": []})
+        login = user_id_to_login.get(user_id, "")
+        links[rule_name]["linked_users"].append({"user_id": user_id, "login": login})
+
+    try:
+        grp_rows = fetch_dicts(conn, "SELECT GROUP_ID, GR__RL_ID FROM SYS_RULES_GRP_RULES")
+        grp_info_rows = fetch_dicts(conn, "SELECT GR__ID, GR__NOME FROM SYS_GRP_GROUP")
+    except Exception:
+        grp_rows = []
+        grp_info_rows = []
+
+    grp_id_to_name = {}
+    for row in grp_info_rows:
+        grp_id_to_name[str(row.get("GR__ID", "")).strip()] = str(row.get("GR__NOME", "")).strip()
+
+    for row in grp_rows:
+        rule_id = str(row.get("GR__RL_ID", "")).strip()
+        group_id = str(row.get("GROUP_ID", "")).strip()
+        rule_name = rule_id_to_name.get(rule_id, "")
+        if not rule_name:
+            continue
+        links.setdefault(rule_name, {"linked_users": [], "linked_groups": []})
+        group_name = grp_id_to_name.get(group_id, "")
+        links[rule_name]["linked_groups"].append({"group_id": group_id, "group_name": group_name})
+
+    return links
+
+
+def _generate_org_dashboards(all_reports, tier1_routines, tier2_data, tier3_clusters, tier3_unclustered, tier4_users, existing_rules=None, existing_links=None, conn=None):
     G = C["green"]; CY = C["cyan"]; R = C["reset"]
     section("DASHBOARD")
+
+    if existing_rules is None and conn is not None:
+        try:
+            existing_rules = load_existing_rules(conn)
+        except Exception:
+            existing_rules = {}
+
+    if existing_links is None and conn is not None:
+        try:
+            from src.user_mapper import UserMapper
+            from src.discovery import discover_columns_for_tables
+            existing_links = _load_existing_links(conn)
+        except Exception:
+            existing_links = {}
+
     users_detail = {}
     user_routines_raw = {}
     user_dept_map = {}
@@ -786,6 +853,24 @@ def _generate_org_dashboards(all_reports, tier1_routines, tier2_data, tier3_clus
         }
         user_routines_raw[login] = user_routine_items(rep)
         user_dept_map[login] = rep.get("user_depto", "").strip() or "SEM_DEPARTAMENTO"
+
+    tier4_map = {}
+    for user_entry in (tier4_users or []):
+        login = user_entry.get("login", "")
+        if login:
+            tier4_map[login] = set(user_entry.get("exclusive_routines", []) or [])
+
+    from src.consolidated_inventory import build_consolidated_inventory
+    consolidated = build_consolidated_inventory(
+        all_reports,
+        existing_rules or {},
+        existing_links or {},
+        set(r.get("code", "") for r in (tier1_routines or []) if r.get("code")),
+        {item["depto"]: set(r["code"] for r in item.get("routines", [])) for item in (tier2_data or [])},
+        {c.get("name", f"CLUSTER_{i}"): {"routines": c.get("routines", []), "members": c.get("users", []), "reuses_existing_rule": c.get("reuses_existing_rule")} for i, c in enumerate(tier3_clusters or [])},
+        tier4_map,
+    )
+
     html_path = os.path.join(OUTPUT_DIR, f"camadas_{cfg.EMPRESA_NAME}.html")
     from src.html_report import generate_cluster_html
     generate_cluster_html(
@@ -794,25 +879,47 @@ def _generate_org_dashboards(all_reports, tier1_routines, tier2_data, tier3_clus
         {"users": tier4_users},
         users_detail, user_routines_raw, user_dept_map,
         html_path, cfg.EMPRESA_NAME,
+        consolidated_inventory=consolidated,
     )
     dept_html_path = os.path.join(OUTPUT_DIR, f"camadas_departamentos_{cfg.EMPRESA_NAME}.html")
     from src.department_html_report import generate_department_html
-    try:
-        with get_connection() as rules_conn:
-            existing_rules = load_existing_rules(rules_conn)
-    except Exception:
-        existing_rules = None
+    reports_with_context = []
+    for rep in all_reports:
+        login = rep.get("user")
+        related_clusters = [cluster for cluster in (tier3_clusters or []) if login in (cluster.get("users") or [])]
+        context = {
+            "global_created_sets": [cluster.get("name") for cluster in related_clusters if cluster.get("name")],
+            "reused_existing_rules": [cluster.get("reuses_existing_rule") for cluster in related_clusters if cluster.get("reuses_existing_rule")],
+        }
+        rep_with_context = dict(rep)
+        rep_with_context["organizational_context"] = context
+        reports_with_context.append(rep_with_context)
+
     generate_department_html(
-        build_department_analysis(all_reports, existing_rules=existing_rules),
+        build_department_analysis(reports_with_context, existing_rules=existing_rules, global_clusters=tier3_clusters),
         dept_html_path, cfg.EMPRESA_NAME,
     )
     validation_dir = os.path.join(OUTPUT_DIR, "departamentos")
-    validation_paths = generate_department_validation_reports(all_reports, validation_dir, cfg.EMPRESA_NAME)
+    validation_paths = generate_department_validation_reports(reports_with_context, validation_dir, cfg.EMPRESA_NAME)
+
+    from src.html_admin import generate_admin_html
+    from src.html_kanban import generate_kanban_html
+    from src.html_tree import generate_tree_html
+    admin_path = os.path.join(OUTPUT_DIR, "camadas_admin.html")
+    kanban_path = os.path.join(OUTPUT_DIR, "camadas_kanban.html")
+    tree_path = os.path.join(OUTPUT_DIR, "camadas_tree.html")
+    generate_admin_html(consolidated, admin_path, cfg.EMPRESA_NAME)
+    generate_kanban_html(consolidated, kanban_path, cfg.EMPRESA_NAME)
+    generate_tree_html(consolidated, tree_path, cfg.EMPRESA_NAME)
+
     import webbrowser
     webbrowser.open(f"file://{os.path.abspath(html_path)}")
     print(f"  {G}Dashboard gerado:{R} {html_path}")
     print(f"  {G}Dashboard por departamento gerado:{R} {dept_html_path}")
     print(f"  {G}Relatorios por departamento gerados:{R} {validation_dir} ({len(validation_paths)} arquivos)")
+    print(f"  {G}Admin Panel gerado:{R} {admin_path}")
+    print(f"  {G}Kanban gerado:{R} {kanban_path}")
+    print(f"  {G}Split Tree gerado:{R} {tree_path}")
     print(f"  {CY}O navegador foi aberto com as 4 camadas.{R}")
     print()
 
@@ -2582,6 +2689,7 @@ def run_batch_organizational(choice):
                 ],
                 sorted(set(rep["user"] for rep in all_reports) - set().union(*[set(info.get("members", [])) for info in gen.tier3_routines.values()] or [set()])),
                 [{"login": user, "exclusive_routines": sorted(routines), "exclusive_count": len(routines)} for user, routines in sorted(gen.tier4_routines.items())],
+                conn=conn,
             )
             _saved_llm_clusters = None
 

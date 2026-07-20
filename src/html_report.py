@@ -2,10 +2,48 @@ import json
 import os
 
 
-def generate_cluster_html(tier1, tier2, tier3_clusters, unclustered, tier4, users_detail, user_routines_raw, user_dept, output_path, empresa_name=""):
+def _routine_code(item):
+    if isinstance(item, dict):
+        return str(item.get("code") or item.get("routine") or "").strip()
+    return str(item or "").split(" - ", 1)[0].strip()
+
+
+def _routine_permissions(item):
+    if isinstance(item, dict) and isinstance(item.get("permissions"), list):
+        return sorted(str(p or "").strip() for p in item.get("permissions", []) if str(p or "").strip())
+    return []
+
+
+def _user_covers_routine_item(user_item, required_item):
+    if _routine_code(user_item) != _routine_code(required_item):
+        return False
+    required_permissions = _routine_permissions(required_item)
+    if not required_permissions:
+        return True
+    user_permissions = _routine_permissions(user_item)
+    if not user_permissions and not isinstance(user_item, dict):
+        return True
+    return all(permission in user_permissions for permission in required_permissions)
+
+
+def _derive_cluster_users(cluster, user_routines_raw):
+    required_items = cluster.get("routines") or cluster.get("common_routines") or []
+    if not required_items:
+        return []
+    users = []
+    for login, items in (user_routines_raw or {}).items():
+        if all(any(_user_covers_routine_item(user_item, required_item) for user_item in (items or [])) for required_item in required_items):
+            users.append(login)
+    return sorted(users)
+
+
+def generate_cluster_html(tier1, tier2, tier3_clusters, unclustered, tier4, users_detail, user_routines_raw, user_dept, output_path, empresa_name="", consolidated_inventory=None):
     clusters_with_status = []
     for cluster in tier3_clusters or []:
         item = dict(cluster)
+        item["users"] = _derive_cluster_users(item, user_routines_raw)
+        if not item["users"]:
+            continue
         reused = str(item.get("reuses_existing_rule") or "").strip()
         item["rule_status_label"] = f"Reaproveita {reused}" if reused else "Nova regra"
         clusters_with_status.append(item)
@@ -21,6 +59,8 @@ def generate_cluster_html(tier1, tier2, tier3_clusters, unclustered, tier4, user
         "users_detail": users_detail,
         "user_routines_raw": user_routines_raw,
         "user_dept": user_dept,
+        "consolidated_rules": (consolidated_inventory or {}).get("rules", []),
+        "deleted_bindings": (consolidated_inventory or {}).get("deleted_bindings", []),
     }
 
     data_json = json.dumps(data, indent=2, ensure_ascii=False)
@@ -93,6 +133,7 @@ body {{ font-family: 'Segoe UI', system-ui, sans-serif; background: #1a1a2e; col
 .cluster-count {{ font-size: 10px; color: #7f8c8d; margin-top: 2px; }}
 .reuse-badge {{ display: inline-block; background: #27ae60; color: #fff; border-radius: 4px; padding: 1px 6px; font-size: 9px; font-weight: 800; margin-left: 6px; }}
 .new-badge {{ display: inline-block; background: #e67e22; color: #fff; border-radius: 4px; padding: 1px 6px; font-size: 9px; font-weight: 800; margin-left: 6px; }}
+.perm-missing {{ display: inline-block; background: #3a2c10; color: #e3b341; padding: 1px 6px; border-radius: 8px; font-size: 10px; font-family: monospace; margin: 1px; }}
 
 .cluster-common {{ padding: 6px 14px; border-bottom: 1px solid #0f3460; max-height: 120px; overflow-y: auto; }}
 .cluster-common-title {{ font-size: 9px; color: #7f8c8d; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 3px; }}
@@ -157,6 +198,7 @@ body {{ font-family: 'Segoe UI', system-ui, sans-serif; background: #1a1a2e; col
     <div class="tab" data-tab="tier2" onclick="switchTab('tier2')">TIER 2<span class="badge" id="badge-tier2">Deptos</span></div>
     <div class="tab" data-tab="tier3" onclick="switchTab('tier3')">TIER 3<span class="badge" id="badge-tier3">Perfis/CJ</span></div>
     <div class="tab" data-tab="tier4" onclick="switchTab('tier4')">TIER 4<span class="badge" id="badge-tier4">Usuarios</span></div>
+    <div class="tab" data-tab="regras" onclick="switchTab('regras')">REGRAS<span class="badge" id="badge-regras">Catalogo</span></div>
 </div>
 
 <div class="main">
@@ -184,6 +226,9 @@ body {{ font-family: 'Segoe UI', system-ui, sans-serif; background: #1a1a2e; col
     <div class="tab-content" id="tab-tier4">
         <div id="tier4-content"></div>
     </div>
+    <div class="tab-content" id="tab-regras">
+        <div id="regras-content"></div>
+    </div>
 </div>
 
 <div class="toast" id="toast"></div>
@@ -206,6 +251,18 @@ let tier3Clusters = DATA.tier3.clusters.map(c => ({{
     rule_status_label: c.rule_status_label || '',
 }}));
 let tier3Unassigned = [...DATA.tier3.unclustered];
+const CONSOLIDATED_RULES = DATA.consolidated_rules || [];
+let consolidatedRules = CONSOLIDATED_RULES.map(r => ({{
+    ...r,
+    routines: (r.routines || []).map(rt => ({{ ...rt, features: [...(rt.features || [])] }})),
+    users: [...(r.users || [])],
+    groups: [...(r.groups || [])],
+    _new_rule_name: r.rule_name,
+    _marked_for_delete: false,
+}}));
+let deletedBindings = [...(DATA.deleted_bindings || [])];
+let regrasFilterAction = '';
+let regrasFilterTier = '';
 const USERS_DETAIL = DATA.users_detail;
 const USER_ROUTINES = DATA.user_routines_raw;
 const USER_DEPT = DATA.user_dept;
@@ -227,6 +284,7 @@ function switchTab(tabId) {{
     activeTab = tabId;
     if (tabId === 'tier3') renderTier3();
     if (tabId === 'tier4') renderTier4();
+    if (tabId === 'regras') renderRegras();
     updateBadges();
 }}
 
@@ -235,6 +293,7 @@ function updateBadges() {{
     document.getElementById('badge-tier2').textContent = TIER2_DATA.length + ' deptos';
     document.getElementById('badge-tier3').textContent = tier3Clusters.length + ' conjuntos';
     document.getElementById('badge-tier4').textContent = 'Usuarios';
+    document.getElementById('badge-regras').textContent = consolidatedRules.length + ' regras';
     document.getElementById('header-info').textContent =
         Object.keys(USERS_DETAIL).length + ' usuarios | ' + tier3Clusters.length + ' perfis/conjuntos (Tier 3)';
 }}
@@ -684,6 +743,85 @@ function renderTier4() {{
     document.getElementById('badge-tier4').textContent = data.filter(r => r.exclusiveCount > 0).length + ' com exclusivas';
 }}
 
+// ---- REGRAS (catalogo completo existente + proposto) ----
+function renderRegras() {{
+    if (activeTab !== 'regras') return;
+    const el = document.getElementById('regras-content');
+    let html = '<div style="display:flex;gap:12px;margin-bottom:12px;flex-wrap:wrap;">';
+    html += '<select onchange="regrasFilterAction=this.value;renderRegras()" style="background:#1a1a2e;color:#e0e0e0;border:1px solid #1a5276;border-radius:6px;padding:6px 10px;"><option value="">Todas as acoes</option><option value="MANTER">MANTER</option><option value="CRIAR">CRIAR</option><option value="COMPLEMENTAR">COMPLEMENTAR</option></select>';
+    html += '<select onchange="regrasFilterTier=this.value;renderRegras()" style="background:#1a1a2e;color:#e0e0e0;border:1px solid #1a5276;border-radius:6px;padding:6px 10px;"><option value="">Todos os tiers</option><option value="EXISTENTE">EXISTENTE</option><option value="TIER2">TIER2</option><option value="TIER3">TIER3</option><option value="TIER4">TIER4</option></select>';
+    html += '<button onclick="addEmptyRule()" class="btn" style="margin-left:auto;">+ Nova regra</button>';
+    html += '</div>';
+
+    let filtered = consolidatedRules;
+    if (regrasFilterAction) filtered = filtered.filter(r => r.action === regrasFilterAction);
+    if (regrasFilterTier) filtered = filtered.filter(r => r.tier === regrasFilterTier);
+
+    html += '<div class="reuse-list">';
+    filtered.forEach((rule, idx) => {{
+        const globalIdx = consolidatedRules.indexOf(rule);
+        let statusCls = rule.source === 'EXISTENTE' ? 'reuse-exata' : 'reuse-parcial';
+        if (rule.action === 'CRIAR') statusCls = 'reuse-nenhuma';
+        if (rule._marked_for_delete) statusCls = '';
+
+        const totalFeatures = rule.routines.reduce((sum, rt) => sum + (rt.features || []).length, 0);
+        const existingFeatures = rule.routines.reduce((sum, rt) => sum + (rt.features || []).filter(f => f.status === 'EXISTENTE').length, 0);
+        const missingFeatures = rule.routines.reduce((sum, rt) => sum + (rt.features || []).filter(f => f.status === 'FALTANTE').length, 0);
+
+        let actionBadge = '<span class="reuse-badge ' + (statusCls || '') + '">' + rule.action + '</span>';
+        if (rule._marked_for_delete) actionBadge = '<span class="reuse-badge" style="background:#c0392b;color:#fff;">REMOVIDO</span>';
+        if (rule.has_excess) actionBadge += ' <span class="reuse-badge" style="background:#8e44ad;color:#fff;">EXCEDENTE</span>';
+
+        html += '<div class="profile" style="margin-bottom:8px;' + (rule._marked_for_delete ? 'opacity:0.5;' : '') + '">';
+        html += '<div class="profile-header"><div class="profile-name">' + escapeHtml(rule.rule_name || '') + actionBadge + '</div>';
+        html += '<div class="profile-meta">Tier: ' + escapeHtml(rule.tier || '') + ' | Usuarios: ' + rule.users.length + ' | Grupos: ' + rule.groups.length;
+        html += ' | Rotinas: ' + rule.routines.length + ' | Features: ' + totalFeatures + ' (existente: ' + existingFeatures + ', faltante: ' + missingFeatures + ')';
+        html += '</div></div>';
+
+        html += '<div class="tags" style="max-height:200px;overflow-y:auto;">';
+        rule.routines.forEach(rt => {{
+            let rtColor = '#3498db';
+            if (rt.status === 'FALTANTE') rtColor = '#e74c3c';
+            html += '<div style="margin-bottom:6px;"><span class="tag" style="border:1px solid ' + rtColor + ';">' + escapeHtml(rt.routine) + '</span>';
+            (rt.features || []).forEach(f => {{
+                let fCls = f.status === 'EXISTENTE' ? 'tag' : 'perm-missing';
+                let fColor = f.status === 'EXISTENTE' ? '' : 'style="background:#3a2c10;color:#e3b341;"';
+                html += '<span class="' + fCls + '" ' + fColor + '>' + escapeHtml(f.feature || '') + '</span>';
+            }});
+            html += '</div>';
+        }});
+        html += '</div>';
+
+        html += '<div class="users" style="display:flex;gap:6px;flex-wrap:wrap;">';
+        html += '<button class="btn" style="font-size:10px;padding:2px 8px;" onclick="toggleRuleDelete(' + globalIdx + ')">' + (rule._marked_for_delete ? 'Desfazer' : 'Excluir') + '</button>';
+        html += '</div></div>';
+    }});
+    html += '</div>';
+
+    if (!filtered.length) html += '<div class="empty-hint">Nenhuma regra encontrada com os filtros atuais</div>';
+    el.innerHTML = html;
+}}
+
+function addEmptyRule() {{
+    const name = prompt('Nome da nova regra (ex: P_CJ_NOVO):');
+    if (!name) return;
+    const tier = prompt('Tier (TIER2, TIER3, TIER4):', 'TIER3');
+    if (!tier) return;
+    consolidatedRules.push({{
+        rule_id: null, rule_name: name.toUpperCase(), rule_description: '', source: 'NOVO', tier: tier.toUpperCase(),
+        action: 'CRIAR', has_excess: false, users: [], groups: [], routines: [],
+        _new_rule_name: name.toUpperCase(), _marked_for_delete: false,
+    }});
+    renderRegras();
+    updateBadges();
+}}
+
+function toggleRuleDelete(idx) {{
+    if (!confirm('Marcar/desmarcar regra para exclusao?')) return;
+    consolidatedRules[idx]._marked_for_delete = consolidatedRules[idx]._marked_for_delete ? false : true;
+    renderRegras();
+}}
+
 // ---- RESET / SAVE ----
 function resetAll() {{
     if (!confirm('Voltar aos conjuntos funcionais originais da LLM? Alteracoes serao perdidas.')) return;
@@ -708,6 +846,13 @@ function saveAll() {{
             unclustered: Object.keys(USER_ROUTINES).filter(login => !tier3Clusters.some(c => deriveClusterUsers(c).includes(login))),
         }},
         tier4: tier4Users,
+        consolidated_rules: consolidatedRules.map(r => ({{
+            rule_id: r.rule_id, rule_name: r.rule_name, rule_description: r.rule_description,
+            source: r.source, tier: r.tier, action: r.action, has_excess: r.has_excess,
+            users: r.users, groups: r.groups, routines: r.routines,
+            _marked_for_delete: r._marked_for_delete || false,
+        }})),
+        deleted_bindings: deletedBindings,
     }};
 
     let blob = new Blob([JSON.stringify(output, null, 2)], {{ type: 'application/json' }});
@@ -719,7 +864,7 @@ function saveAll() {{
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
-    showToast('JSON salvo com os 4 tiers!');
+    showToast('JSON salvo com regras consolidadas!');
 }}
 
 function showToast(msg) {{

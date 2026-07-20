@@ -278,6 +278,20 @@ class Tier3FunctionalSetsTest(unittest.TestCase):
         self.assertEqual(result[0]["name"], "P_PF_CONTROLADORI_01")
         self.assertEqual(result[0]["type"], "equivalent_profile")
 
+    def test_normalize_preserves_reuse_metadata_from_loaded_clusters(self):
+        raw_sets = [{
+            "name": "P_CJ_ETIQUETAS",
+            "reason": "Rotinas de etiquetas",
+            "routines": ["ETQ001", "ETQ002"],
+            "reuses_existing_rule": "P_EXISTENTE",
+            "rule_status_label": "Reaproveita P_EXISTENTE",
+        }]
+
+        result = normalize_tier3_sets(raw_sets, self.reports)
+
+        self.assertEqual(result[0]["reuses_existing_rule"], "P_EXISTENTE")
+        self.assertEqual(result[0]["rule_status_label"], "Reaproveita P_EXISTENTE")
+
     def test_build_department_analysis_groups_equal_profiles_and_reduces_tier4(self):
         reports = [
             {
@@ -309,6 +323,59 @@ class Tier3FunctionalSetsTest(unittest.TestCase):
         self.assertEqual(by_login["maria"]["exclusive_count"], 0)
         self.assertEqual(by_login["vitor"]["exclusive_count"], 0)
         self.assertEqual(by_login["ana"]["exclusive_count"], 0)
+
+    def test_build_department_analysis_marks_single_user_department_as_ineligible(self):
+        reports = [
+            {
+                "user": "joao",
+                "user_name": "Joao",
+                "user_depto": "COMERCIAL",
+                "routines_summary": [{"routine": "MATA010"}],
+            },
+        ]
+
+        result = build_department_analysis(reports)
+
+        dept = result["COMERCIAL"]
+        self.assertEqual(dept["total_users"], 1)
+        self.assertFalse(dept["eligible_for_department_profile"])
+        self.assertEqual(dept["min_users_required"], 2)
+        self.assertEqual(dept["skip_reason"], "MIN_USERS")
+
+    def test_build_department_analysis_attaches_global_clusters_by_department_users(self):
+        reports = [
+            {
+                "user": "maria",
+                "user_name": "Maria",
+                "user_depto": "CONTROLADORIA",
+                "routines_summary": [{"routine": "FINA001"}],
+            },
+            {
+                "user": "vitor",
+                "user_name": "Vitor",
+                "user_depto": "CONTROLADORIA",
+                "routines_summary": [{"routine": "FINA001"}],
+            },
+            {
+                "user": "ana",
+                "user_name": "Ana",
+                "user_depto": "COMPRAS",
+                "routines_summary": [{"routine": "MATA010"}],
+            },
+        ]
+
+        global_clusters = [
+            {"name": "P_CJ_GLOBAL", "users": ["maria"], "routines": ["FINA100"], "reuses_existing_rule": "P_EXISTENTE"},
+            {"name": "P_CJ_COMPRAS", "users": ["ana"], "routines": ["MATA010"]},
+        ]
+
+        result = build_department_analysis(reports, global_clusters=global_clusters)
+
+        controladoria = result["CONTROLADORIA"]
+        self.assertEqual(controladoria["global_created_sets"][0]["name"], "P_CJ_GLOBAL")
+        self.assertEqual(controladoria["global_reused_sets"][0]["reuses_existing_rule"], "P_EXISTENTE")
+        compras = result["COMPRAS"]
+        self.assertEqual(compras["global_created_sets"][0]["name"], "P_CJ_COMPRAS")
 
     def test_build_department_common_routines_ignores_single_user_departments_by_default(self):
         reports = [
@@ -381,6 +448,20 @@ class ExistingRulesTest(unittest.TestCase):
         self.assertIn("P_COMPRAS", result)
         self.assertEqual(result["P_COMPRAS"]["MATA020"], {"Visualizar", "Alterar"})
         self.assertIn("P_VENDAS", result)
+        conn.close()
+
+    def test_load_existing_rules_accepts_alternative_rule_id_columns(self):
+        import sqlite3
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.execute("CREATE TABLE SYS_RULES ([RUL_ID] TEXT,[RUL_NAME] TEXT)")
+        conn.execute("INSERT INTO SYS_RULES VALUES ('1','P_COMPRAS')")
+        conn.execute("CREATE TABLE SYS_RULES_FEATURES ([FET_RUL_ID] TEXT,[FET_FUNCTION] TEXT,[FET_FEATURE] TEXT,[FET_ACCESS] TEXT)")
+        conn.execute("INSERT INTO SYS_RULES_FEATURES VALUES ('1','MATA020','Visualizar','1')")
+
+        result = load_existing_rules(conn)
+
+        self.assertEqual(result["P_COMPRAS"]["MATA020"], {"Visualizar"})
         conn.close()
 
     def test_match_detects_exact_overlap_with_permissions(self):

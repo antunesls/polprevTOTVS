@@ -34,6 +34,33 @@ class DepartmentHtmlReportTest(unittest.TestCase):
         self.assertIn("P_PF_CONTROLADORI_01", html)
         self.assertIn("renderDepartment", html)
 
+    def test_department_dashboard_lists_reused_existing_rules(self):
+        from src.department_html_report import generate_department_html
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_path = Path(tmpdir) / "departamentos.html"
+            generate_department_html(
+                {
+                    "COMPRAS": {
+                        "total_users": 2,
+                        "total_routines": 3,
+                        "profile_groups": [
+                            {"name": "P_CJ_COMPRAS", "users": ["maria", "vitor"], "routines": ["MATA010"], "reuses_existing_rule": "P_COMPRAS"},
+                            {"name": "P_CJ_NOVO", "users": ["ana"], "routines": ["MATA020"]},
+                        ],
+                        "tier4_users": [],
+                    }
+                },
+                str(output_path),
+                "TESTE",
+            )
+
+            html = output_path.read_text(encoding="utf-8")
+
+        self.assertIn("Conjuntos preexistentes reaproveitados", html)
+        self.assertIn("P_COMPRAS", html)
+        self.assertIn("P_CJ_COMPRAS", html)
+
 
 class HtmlReportPerformanceTest(unittest.TestCase):
     def test_routine_pool_uses_search_threshold_limit_and_precomputed_counts(self):
@@ -86,6 +113,30 @@ class HtmlReportPerformanceTest(unittest.TestCase):
 
         self.assertIn("Reaproveita P_COMPRAS", html)
         self.assertIn("Nova regra", html)
+
+    def test_tier3_html_filters_clusters_without_adherent_users_before_render(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_path = Path(tmpdir) / "dashboard.html"
+            generate_cluster_html(
+                {"routines": [], "total_users": 1, "empresa": "TESTE"},
+                [],
+                [
+                    {"name": "P_CJ_VALIDO", "routines": ["MATA010"], "users": ["u1"]},
+                    {"name": "P_CJ_INVALIDO", "routines": ["MATA999"], "users": ["u1"]},
+                ],
+                [],
+                {"users": []},
+                {"u1": {"name": "User 1", "login": "u1", "depto": "COMPRAS", "total_routines": 1}},
+                {"u1": [{"code": "MATA010", "permissions": []}]},
+                {"u1": "COMPRAS"},
+                str(output_path),
+                "TESTE",
+            )
+
+            html = output_path.read_text(encoding="utf-8")
+
+        self.assertIn('"name": "P_CJ_VALIDO"', html)
+        self.assertNotIn('"name": "P_CJ_INVALIDO"', html)
 
 
 class UserDashboardHtmlTest(unittest.TestCase):
@@ -141,6 +192,115 @@ class UserDashboardHtmlTest(unittest.TestCase):
         self.assertIn("Usa impressora no server", html)
         self.assertIn(">2</div><div class=\"kpi-label\">Codigos ativos</div>", html)
         self.assertNotIn(">OK<", html)
+
+    def test_dashboard_shows_privilege_reuse_recommendation(self):
+        report = {
+            "user": "usr001",
+            "user_id": "000001",
+            "total_menus": 1,
+            "total_routines": 1,
+            "groups": [{"group_id": "10", "group_name": "COMPRAS"}],
+            "access_codes": [],
+            "menus": [{"items": []}],
+            "routines_summary": [
+                {
+                    "routine": "MATA010",
+                    "description": "Produtos",
+                    "menu_name": "SIGACOM",
+                    "has_explicit_privilege": True,
+                    "effective_access": "PERMITIDO",
+                    "browse_permissions": [],
+                    "disabled_by_acbrowse": False,
+                },
+            ],
+            "privileges_raw": {},
+            "privilege_recommendations": {
+                "requested_permissions": ["MATA010: Visualizar", "MATA010: Alterar"],
+                "suggested_base_rule": {
+                    "rule_id": "A1",
+                    "rule_name": "P_EXISTENTE",
+                    "coverage_status": "PARCIAL",
+                    "matched_permissions_count": 1,
+                    "requested_permissions_count": 2,
+                    "missing_permissions": ["MATA010: Alterar"],
+                    "excess_permissions": ["MATA020: Excluir"],
+                    "has_excess_permissions": True,
+                    "linked_users": [{"user_id": "000777", "login": "maria"}],
+                    "linked_groups": [{"group_id": "10", "group_name": "COMPRAS"}],
+                },
+                "exact_matches": [],
+                "partial_matches": [],
+            },
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            report_path = Path(tmpdir) / "usr001_access.json"
+            report_path.write_text(json.dumps(report), encoding="utf-8")
+
+            with patch("src.dashboard.OUTPUT_DIR", tmpdir):
+                output_path = generate_html(str(report_path))
+
+            html = Path(output_path).read_text(encoding="utf-8")
+
+        self.assertIn("Sugestao de Reaproveitamento", html)
+        self.assertIn("P_EXISTENTE", html)
+        self.assertIn("Cobertura parcial", html)
+        self.assertIn("Reaproveitar e complementar", html)
+        self.assertIn("MATA010: Alterar", html)
+        self.assertIn("MATA020: Excluir", html)
+        self.assertIn("COMPRAS", html)
+
+    def test_dashboard_shows_exact_reuse_action_when_no_complement_is_needed(self):
+        report = {
+            "user": "usr001",
+            "user_id": "000001",
+            "total_menus": 1,
+            "total_routines": 1,
+            "groups": [],
+            "access_codes": [],
+            "menus": [{"items": []}],
+            "routines_summary": [
+                {
+                    "routine": "MATA010",
+                    "description": "Produtos",
+                    "menu_name": "SIGACOM",
+                    "has_explicit_privilege": True,
+                    "effective_access": "PERMITIDO",
+                    "browse_permissions": [],
+                    "disabled_by_acbrowse": False,
+                },
+            ],
+            "privileges_raw": {},
+            "privilege_recommendations": {
+                "requested_permissions": ["MATA010: Visualizar"],
+                "suggested_base_rule": {
+                    "rule_id": "A2",
+                    "rule_name": "P_EXATO",
+                    "coverage_status": "EXATA",
+                    "matched_permissions_count": 1,
+                    "requested_permissions_count": 1,
+                    "missing_permissions": [],
+                    "excess_permissions": [],
+                    "has_excess_permissions": False,
+                    "linked_users": [],
+                    "linked_groups": [],
+                },
+                "exact_matches": [],
+                "partial_matches": [],
+            },
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            report_path = Path(tmpdir) / "usr001_access.json"
+            report_path.write_text(json.dumps(report), encoding="utf-8")
+
+            with patch("src.dashboard.OUTPUT_DIR", tmpdir):
+                output_path = generate_html(str(report_path))
+
+            html = Path(output_path).read_text(encoding="utf-8")
+
+        self.assertIn("Cobertura exata", html)
+        self.assertIn("Reaproveitar sem ajuste", html)
 
 
 if __name__ == "__main__":

@@ -61,9 +61,274 @@ class UserMapper:
             return candidate
         if self._access_rank(n_candidate) < self._access_rank(n_current):
             return current
-        if candidate.get("rule_name") == "DIRECT_USER":
+        if candidate.get("binding_type") == "user":
             return candidate
         return current
+
+    def _row_value(self, row, column_name, default=None):
+        if not column_name:
+            return default
+        return row.get(column_name, default)
+
+    def _build_rule_map(self, rule_ids, include_deleted_filter=True):
+        if not rule_ids:
+            return {}
+
+        rul_pk = self.resolve_col("SYS_RULES", ["RL__ID", "RUL_ID", "ID"])
+        rul_name = self.resolve_col("SYS_RULES", ["RL__CODIGO", "RUL_NAME", "NAME", "RULES_NAME"])
+        rul_desc = self.resolve_col("SYS_RULES", ["RL__DESCRI", "RUL_DESC", "DESCRIPTION"])
+
+        if not rul_pk:
+            return {}
+
+        placeholders = ",".join("?" for _ in rule_ids)
+        rule_cols = [rul_pk]
+        if rul_name:
+            rule_cols.append(rul_name)
+        if rul_desc:
+            rule_cols.append(rul_desc)
+
+        rows = fetch_dicts(self.conn,
+            f"SELECT {', '.join(rule_cols)} FROM SYS_RULES WHERE {rul_pk} IN ({placeholders})",
+            list(rule_ids))
+
+        rules_map = {}
+        for row in rows:
+            c_rule_id = self._row_value(row, rul_pk)
+            if c_rule_id in (None, ""):
+                continue
+            rules_map[c_rule_id] = {
+                "rule_id": c_rule_id,
+                "rule_name": row.get(rul_name, "") if rul_name else "",
+                "rule_description": row.get(rul_desc, "") if rul_desc else "",
+            }
+
+        return rules_map
+
+    def _load_rule_features(self, rule_ids):
+        fet_rul = self.resolve_col("SYS_RULES_FEATURES", ["RL__ID", "FET_RUL_ID", "RUL_ID", "RFE_RUL_ID"])
+        fet_func = self.resolve_col("SYS_RULES_FEATURES",
+            ["RL__ROTINA", "FET_FUNCTION", "FUNCTION", "RFE_FUNCTION", "RFE_ROTINA"])
+        fet_feat = self.resolve_col("SYS_RULES_FEATURES",
+            ["RL__DESMDEF", "FET_FEATURE", "FEATURE", "RFE_FEATURE", "RFE_DESMDEF"])
+        fet_access = self.resolve_col("SYS_RULES_FEATURES",
+            ["RL__ACESSO", "FET_ACCESS", "ACCESS", "RFE_ACCESS", "RFE_ACESSO"])
+        fet_menuoper = self.resolve_col("SYS_RULES_FEATURES", ["RL__MENUOPER", "MENUOPER"])
+        fet_menudef = self.resolve_col("SYS_RULES_FEATURES", ["RL__MENUDEF", "MENUDEF"])
+        fet_del = self.resolve_col("SYS_RULES_FEATURES", ["D_E_L_E_T_"])
+
+        if not rule_ids or not fet_rul or not fet_func:
+            return []
+
+        placeholders = ",".join("?" for _ in rule_ids)
+        feat_cols = [fet_rul, fet_func]
+        if fet_feat:
+            feat_cols.append(fet_feat)
+        if fet_access:
+            feat_cols.append(fet_access)
+        if fet_menuoper:
+            feat_cols.append(fet_menuoper)
+        if fet_menudef:
+            feat_cols.append(fet_menudef)
+
+        feat_where = f"{fet_rul} IN ({placeholders})"
+        feat_params = list(rule_ids)
+        if fet_del:
+            feat_where += f" AND {fet_del} = ?"
+            feat_params.append(" ")
+
+        return fetch_dicts(self.conn,
+            f"SELECT {', '.join(feat_cols)} FROM SYS_RULES_FEATURES WHERE {feat_where}",
+            feat_params)
+
+    def _flatten_privilege_map_permissions(self, privileges):
+        permissions = set()
+
+        for routine, features in (privileges or {}).items():
+            for feature, info in (features or {}).items():
+                if self._normalize_access(info.get("access")) != "PERMITIDO":
+                    continue
+                c_routine = str(routine or "").strip().upper()
+                c_feature = str(feature or "").strip()
+                if c_routine and c_feature:
+                    permissions.add(f"{c_routine}: {c_feature}")
+
+        return permissions
+
+    def _flatten_rule_permissions(self, privilege_set):
+        permissions = set()
+
+        for routine_info in privilege_set.get("routines", []) or []:
+            c_routine = str(routine_info.get("routine") or "").strip().upper()
+            if not c_routine:
+                continue
+            for feature_info in routine_info.get("features", []) or []:
+                if self._normalize_access(feature_info.get("access")) != "PERMITIDO":
+                    continue
+                c_feature = str(feature_info.get("feature") or "").strip()
+                if c_feature:
+                    permissions.add(f"{c_routine}: {c_feature}")
+
+        return permissions
+
+    def _analyze_existing_privilege_recommendations(self, all_privileges, existing_privilege_sets):
+        requested_permissions = self._flatten_privilege_map_permissions(all_privileges)
+        recommendations = []
+
+        for privilege_set in existing_privilege_sets or []:
+            rule_permissions = self._flatten_rule_permissions(privilege_set)
+            matched_permissions = sorted(requested_permissions & rule_permissions)
+            missing_permissions = sorted(requested_permissions - rule_permissions)
+            excess_permissions = sorted(rule_permissions - requested_permissions)
+
+            if not matched_permissions and requested_permissions:
+                coverage_status = "NENHUMA"
+            elif not missing_permissions:
+                coverage_status = "EXATA"
+            else:
+                coverage_status = "PARCIAL"
+
+            recommendations.append({
+                "rule_id": privilege_set.get("rule_id"),
+                "rule_name": privilege_set.get("rule_name", ""),
+                "rule_description": privilege_set.get("rule_description", ""),
+                "coverage_status": coverage_status,
+                "matched_permissions_count": len(matched_permissions),
+                "requested_permissions_count": len(requested_permissions),
+                "matched_permissions": matched_permissions,
+                "missing_permissions": missing_permissions,
+                "excess_permissions": excess_permissions,
+                "has_excess_permissions": len(excess_permissions) > 0,
+                "linked_users": privilege_set.get("linked_users", []),
+                "linked_groups": privilege_set.get("linked_groups", []),
+            })
+
+        recommendations.sort(key=lambda item: (
+            0 if item["coverage_status"] == "EXATA" else 1 if item["coverage_status"] == "PARCIAL" else 2,
+            -item["matched_permissions_count"],
+            len(item["missing_permissions"]),
+            len(item["excess_permissions"]),
+            str(item.get("rule_name", "")),
+        ))
+
+        suggested = recommendations[0] if recommendations and recommendations[0]["coverage_status"] != "NENHUMA" else None
+
+        return {
+            "requested_permissions": sorted(requested_permissions),
+            "suggested_base_rule": suggested,
+            "exact_matches": [item for item in recommendations if item["coverage_status"] == "EXATA"],
+            "partial_matches": [item for item in recommendations if item["coverage_status"] == "PARCIAL"],
+        }
+
+    def map_existing_privilege_sets(self):
+        rul_pk = self.resolve_col("SYS_RULES", ["RL__ID", "RUL_ID", "ID"])
+        rul_name = self.resolve_col("SYS_RULES", ["RL__CODIGO", "RUL_NAME", "NAME", "RULES_NAME"])
+        rul_desc = self.resolve_col("SYS_RULES", ["RL__DESCRI", "RUL_DESC", "DESCRIPTION"])
+
+        if not rul_pk:
+            return []
+
+        rule_cols = [rul_pk]
+        if rul_name:
+            rule_cols.append(rul_name)
+        if rul_desc:
+            rule_cols.append(rul_desc)
+
+        rule_rows = fetch_dicts(self.conn, f"SELECT {', '.join(rule_cols)} FROM SYS_RULES")
+        if not rule_rows:
+            return []
+
+        privilege_sets = {}
+        for row in rule_rows:
+            c_rule_id = self._row_value(row, rul_pk)
+            if c_rule_id in (None, ""):
+                continue
+            privilege_sets[c_rule_id] = {
+                "rule_id": c_rule_id,
+                "rule_name": row.get(rul_name, "") if rul_name else "",
+                "rule_description": row.get(rul_desc, "") if rul_desc else "",
+                "linked_users": [],
+                "linked_groups": [],
+                "routines": [],
+            }
+
+        rule_ids = list(privilege_sets.keys())
+        if not rule_ids:
+            return []
+
+        fet_rul = self.resolve_col("SYS_RULES_FEATURES", ["RL__ID", "FET_RUL_ID", "RUL_ID", "RFE_RUL_ID"])
+        fet_func = self.resolve_col("SYS_RULES_FEATURES", ["RL__ROTINA", "FET_FUNCTION", "FUNCTION", "RFE_FUNCTION", "RFE_ROTINA"])
+        fet_feat = self.resolve_col("SYS_RULES_FEATURES", ["RL__DESMDEF", "FET_FEATURE", "FEATURE", "RFE_FEATURE", "RFE_DESMDEF"])
+        fet_access = self.resolve_col("SYS_RULES_FEATURES", ["RL__ACESSO", "FET_ACCESS", "ACCESS", "RFE_ACCESS", "RFE_ACESSO"])
+        fet_menuoper = self.resolve_col("SYS_RULES_FEATURES", ["RL__MENUOPER", "MENUOPER"])
+        fet_menudef = self.resolve_col("SYS_RULES_FEATURES", ["RL__MENUDEF", "MENUDEF"])
+
+        feature_rows = self._load_rule_features(rule_ids)
+        routines_map = {rule_id: {} for rule_id in rule_ids}
+        for row in feature_rows:
+            c_rule_id = self._row_value(row, fet_rul)
+            c_routine = str(self._row_value(row, fet_func, "") or "").strip().upper()
+            if c_rule_id not in routines_map or not c_routine:
+                continue
+            routines_map[c_rule_id].setdefault(c_routine, [])
+            routines_map[c_rule_id][c_routine].append({
+                "feature": str(self._row_value(row, fet_feat, "") or "").strip(),
+                "access": self._row_value(row, fet_access, ""),
+                "menu_oper": self._row_value(row, fet_menuoper),
+                "menu_def": str(self._row_value(row, fet_menudef, "") or "").strip(),
+            })
+
+        for rule_id, routines in routines_map.items():
+            privilege_sets[rule_id]["routines"] = [
+                {"routine": routine, "features": features}
+                for routine, features in sorted(routines.items())
+            ]
+
+        usr_col = self.resolve_col("SYS_RULES_USR_RULES", ["USER_ID", "URR_USR_ID", "USR_ID", "RUR_USR_ID"])
+        usr_rul_col = self.resolve_col("SYS_RULES_USR_RULES", ["USR_RL_ID", "URR_RUL_ID", "RUL_ID", "RUR_RUL_ID"])
+        usr_pk = self.resolve_col("SYS_USR", ["USR_ID", "ID"])
+        usr_login = self.resolve_col("SYS_USR", ["USR_CODIGO", "USR_LOGIN", "LOGIN", "USR_USERNAME", "USR_COD"])
+        if usr_col and usr_rul_col and usr_pk:
+            rows = fetch_dicts(self.conn, f"SELECT {usr_col}, {usr_rul_col} FROM SYS_RULES_USR_RULES")
+            user_ids = sorted({row.get(usr_col) for row in rows if row.get(usr_col)})
+            user_map = {}
+            if user_ids and usr_login:
+                placeholders = ",".join("?" for _ in user_ids)
+                user_rows = fetch_dicts(self.conn,
+                    f"SELECT {usr_pk}, {usr_login} FROM SYS_USR WHERE {usr_pk} IN ({placeholders})",
+                    user_ids)
+                user_map = {row[usr_pk]: str(row.get(usr_login, "") or "").strip() for row in user_rows}
+            for row in rows:
+                c_rule_id = row.get(usr_rul_col)
+                if c_rule_id in privilege_sets:
+                    privilege_sets[c_rule_id]["linked_users"].append({
+                        "user_id": row.get(usr_col),
+                        "login": user_map.get(row.get(usr_col), ""),
+                    })
+
+        grp_col = self.resolve_col("SYS_RULES_GRP_RULES", ["GROUP_ID", "GRR_GRP_ID", "GRP_ID", "RGR_GRP_ID"])
+        grp_rul_col = self.resolve_col("SYS_RULES_GRP_RULES", ["GR__RL_ID", "GRR_RUL_ID", "RUL_ID", "RGR_RUL_ID"])
+        grp_pk = self.resolve_col("SYS_GRP_GROUP", ["GR__ID", "GRP_ID", "ID"])
+        grp_name = self.resolve_col("SYS_GRP_GROUP", ["GR__NOME", "GRP_NAME", "NAME", "GROUP_NAME"])
+        if grp_col and grp_rul_col and grp_pk:
+            rows = fetch_dicts(self.conn, f"SELECT {grp_col}, {grp_rul_col} FROM SYS_RULES_GRP_RULES")
+            group_ids = sorted({row.get(grp_col) for row in rows if row.get(grp_col)})
+            group_map = {}
+            if group_ids and grp_name:
+                placeholders = ",".join("?" for _ in group_ids)
+                group_rows = fetch_dicts(self.conn,
+                    f"SELECT {grp_pk}, {grp_name} FROM SYS_GRP_GROUP WHERE {grp_pk} IN ({placeholders})",
+                    group_ids)
+                group_map = {row[grp_pk]: str(row.get(grp_name, "") or "").strip() for row in group_rows}
+            for row in rows:
+                c_rule_id = row.get(grp_rul_col)
+                if c_rule_id in privilege_sets:
+                    privilege_sets[c_rule_id]["linked_groups"].append({
+                        "group_id": row.get(grp_col),
+                        "group_name": group_map.get(row.get(grp_col), ""),
+                    })
+
+        return list(privilege_sets.values())
 
     def _merge_privilege_maps(self, group_privileges, direct_privileges):
         privileges = {}
@@ -421,7 +686,7 @@ class UserMapper:
             grp_rows = fetch_dicts(self.conn,
                 f"SELECT {grp_pk}, {grp_name} FROM SYS_GRP_GROUP WHERE {grp_pk} IN ({placeholders})",
                 group_ids)
-            groups = [{"group_id": row[grp_pk], "group_name": row[grp_name]} for row in grp_rows]
+            groups = [{"group_id": self._row_value(row, grp_pk), "group_name": self._row_value(row, grp_name, "")} for row in grp_rows if self._row_value(row, grp_pk) not in (None, "")]
 
         print(f"  Grupos do usuario: {len(groups)} encontrados")
         return groups
@@ -458,7 +723,7 @@ class UserMapper:
             rule_rows = fetch_dicts(self.conn,
                 f"SELECT {', '.join(rule_cols)} FROM SYS_RULES WHERE {rul_pk} IN ({placeholders})",
                 rule_ids)
-            rules_map = {row[rul_pk]: row.get(rul_name, "") if rul_name else "" for row in rule_rows}
+            rules_map = {self._row_value(row, rul_pk): row.get(rul_name, "") if rul_name else "" for row in rule_rows if self._row_value(row, rul_pk) not in (None, "")}
 
         fet_rul = self.resolve_col("SYS_RULES_FEATURES", ["RL__ID", "FET_RUL_ID", "RUL_ID", "RFE_RUL_ID"])
         fet_func = self.resolve_col("SYS_RULES_FEATURES",
@@ -495,21 +760,25 @@ class UserMapper:
                 feat_params)
 
             for row in feat_rows:
-                rule_name = rules_map.get(row[fet_rul], f"Rule_{row[fet_rul]}")
-                func = row[fet_func]
-                feature = row[fet_feat] if fet_feat else ""
-                access = row[fet_access] if fet_access else "?"
-                menu_oper = row[fet_menuoper] if fet_menuoper else None
-                menu_def = row[fet_menudef] if fet_menudef else ""
+                c_rule_id = self._row_value(row, fet_rul)
+                func = self._row_value(row, fet_func, "")
+                feature = self._row_value(row, fet_feat, "") if fet_feat else ""
+                access = self._row_value(row, fet_access, "?") if fet_access else "?"
+                menu_oper = self._row_value(row, fet_menuoper) if fet_menuoper else None
+                menu_def = self._row_value(row, fet_menudef, "") if fet_menudef else ""
+                if c_rule_id in (None, "") or not func:
+                    continue
+                rule_name = rules_map.get(c_rule_id, f"Rule_{c_rule_id}")
 
                 if func not in privileges:
                     privileges[func] = {}
                 privileges[func][feature] = {
                     "access": access,
                     "rule_name": rule_name,
-                    "rule_id": row[fet_rul],
+                    "rule_id": c_rule_id,
                     "menu_oper": menu_oper,
                     "menu_def": menu_def,
+                    "binding_type": "group",
                 }
 
         print(f"  Privilegios mapeados: {len(privileges)} rotinas com features")
@@ -529,6 +798,8 @@ class UserMapper:
 
         rule_ids = list(set(r[rul_col] for r in rows))
 
+        rules_map = self._build_rule_map(rule_ids)
+
         fet_rul = self.resolve_col("SYS_RULES_FEATURES", ["RL__ID", "FET_RUL_ID", "RUL_ID"])
         fet_func = self.resolve_col("SYS_RULES_FEATURES",
             ["RL__ROTINA", "FET_FUNCTION", "FUNCTION"])
@@ -538,11 +809,12 @@ class UserMapper:
             ["RL__ACESSO", "FET_ACCESS", "ACCESS"])
         fet_menuoper = self.resolve_col("SYS_RULES_FEATURES", ["RL__MENUOPER", "MENUOPER"])
         fet_menudef = self.resolve_col("SYS_RULES_FEATURES", ["RL__MENUDEF", "MENUDEF"])
+        fet_del = self.resolve_col("SYS_RULES_FEATURES", ["D_E_L_E_T_"])
 
         privileges = {}
         if rule_ids and fet_rul and fet_func:
             placeholders = ",".join("?" for _ in rule_ids)
-            feat_cols = [fet_func]
+            feat_cols = [fet_rul, fet_func]
             if fet_feat:
                 feat_cols.append(fet_feat)
             if fet_access:
@@ -552,24 +824,34 @@ class UserMapper:
             if fet_menudef:
                 feat_cols.append(fet_menudef)
 
+            feat_where = f"{fet_rul} IN ({placeholders})"
+            feat_params = list(rule_ids)
+            if fet_del:
+                feat_where += f" AND {fet_del} = ?"
+                feat_params.append(" ")
+
             feat_rows = fetch_dicts(self.conn,
-                f"SELECT {', '.join(feat_cols)} FROM SYS_RULES_FEATURES WHERE {fet_rul} IN ({placeholders})",
-                rule_ids)
+                f"SELECT {', '.join(feat_cols)} FROM SYS_RULES_FEATURES WHERE {feat_where}",
+                feat_params)
 
             for row in feat_rows:
-                func = row[fet_func]
-                feature = row[fet_feat] if fet_feat else ""
-                access = row[fet_access] if fet_access else "?"
-                menu_oper = row[fet_menuoper] if fet_menuoper else None
-                menu_def = row[fet_menudef] if fet_menudef else ""
+                c_rule_id = self._row_value(row, fet_rul)
+                func = self._row_value(row, fet_func, "")
+                feature = self._row_value(row, fet_feat, "") if fet_feat else ""
+                access = self._row_value(row, fet_access, "?") if fet_access else "?"
+                menu_oper = self._row_value(row, fet_menuoper) if fet_menuoper else None
+                menu_def = self._row_value(row, fet_menudef, "") if fet_menudef else ""
+                if c_rule_id in (None, "") or not func:
+                    continue
                 if func not in privileges:
                     privileges[func] = {}
                 privileges[func][feature] = {
                     "access": access,
-                    "rule_name": "DIRECT_USER",
-                    "rule_id": None,
+                    "rule_name": rules_map.get(c_rule_id, {}).get("rule_name", f"Rule_{c_rule_id}"),
+                    "rule_id": c_rule_id,
                     "menu_oper": menu_oper,
                     "menu_def": menu_def,
+                    "binding_type": "user",
                 }
 
         return privileges
@@ -782,8 +1064,14 @@ class UserMapper:
         group_ids = [g["group_id"] for g in groups]
         group_privileges = self.map_group_privileges(group_ids)
         direct_privileges = self.map_user_privileges_direct(user["id"])
+        try:
+            existing_privilege_sets = self.map_existing_privilege_sets()
+        except Exception as e:
+            print(f"  [AVISO] Nao foi possivel inventariar regras existentes: {e}")
+            existing_privilege_sets = []
 
         all_privileges = self._merge_privilege_maps(group_privileges, direct_privileges)
+        privilege_recommendations = self._analyze_existing_privilege_recommendations(all_privileges, existing_privilege_sets)
         has_group_default = any(
             str(group.get("group_id", "")).strip() == "*" or str(group.get("group_name", "")).strip() == "*"
             for group in groups
@@ -916,6 +1204,8 @@ class UserMapper:
             "menus": menu_tree,
             "routines_summary": routines_flat,
             "privileges_raw": all_privileges,
+            "existing_privilege_sets": existing_privilege_sets,
+            "privilege_recommendations": privilege_recommendations,
         }
 
         routines_with_priv = sum(1 for r in routines_flat if r["has_explicit_privilege"])

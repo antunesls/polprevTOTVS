@@ -190,6 +190,45 @@ class DepartmentValidationReportTest(unittest.TestCase):
         self.assertIn("VENDEDORES", html)
         self.assertIn("112 - Gerar rel. no servidor", html)
 
+    def test_renders_organizational_context_when_available(self):
+        from src.department_validation_report import generate_department_validation_reports
+
+        reports = self._build_reports()
+        reports[0]["organizational_context"] = {
+            "global_created_sets": ["P_CJ_CICLO_COMPRAS"],
+            "reused_existing_rules": ["P_COMPRAS"],
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            generate_department_validation_reports(reports, tmpdir, "TESTE")
+            html = Path(tmpdir, "COMERCIAL.html").read_text(encoding="utf-8")
+
+        self.assertIn("Contexto organizacional", html)
+        self.assertIn("P_CJ_CICLO_COMPRAS", html)
+        self.assertIn("P_COMPRAS", html)
+
+    def test_generation_removes_stale_html_and_normalizes_department_file_names(self):
+        from src.department_validation_report import generate_department_validation_reports
+
+        reports = [
+            {
+                "user": "joao",
+                "user_name": "Joao",
+                "user_depto": "Serviço",
+                "groups": [],
+                "access_codes": [],
+                "routines_summary": [{"routine": "MATA010", "effective_access": "PERMITIDO", "features": {}}],
+            }
+        ]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            Path(tmpdir, "SERVICO.html").write_text("stale", encoding="utf-8")
+            Path(tmpdir, "SERVIÇO.html").write_text("stale", encoding="utf-8")
+            paths = generate_department_validation_reports(reports, tmpdir, "TESTE")
+
+            self.assertEqual([Path(p).name for p in paths], ["SERVICO.html"])
+            self.assertFalse(Path(tmpdir, "SERVIÇO.html").exists())
+
 
 if __name__ == "__main__":
     unittest.main()

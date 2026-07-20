@@ -1,10 +1,11 @@
 import unittest
+from unittest.mock import patch
 
 from src.user_mapper import UserMapper
 
 
 class FakeUserMapper(UserMapper):
-    def __init__(self, menu_tree=None, groups=None, group_privileges=None, direct_privileges=None, acbrowse=None, access_codes=None):
+    def __init__(self, menu_tree=None, groups=None, group_privileges=None, direct_privileges=None, acbrowse=None, access_codes=None, existing_privilege_sets=None):
         super().__init__({}, None)
         self._menu_tree = menu_tree or []
         self._groups = groups or []
@@ -12,6 +13,7 @@ class FakeUserMapper(UserMapper):
         self._direct_privileges = direct_privileges or {}
         self._acbrowse = acbrowse or {}
         self._access_codes = access_codes or []
+        self._existing_privilege_sets = existing_privilege_sets or []
 
     def find_user(self, login):
         return {"id": "000001", "login": login, "depto": "TI", "name": "Usuario Teste"}
@@ -37,6 +39,9 @@ class FakeUserMapper(UserMapper):
     def map_user_access_codes(self, user_id):
         return self._access_codes
 
+    def map_existing_privilege_sets(self):
+        return self._existing_privilege_sets
+
 
 class TrackingUserMapper(FakeUserMapper):
     def __init__(self, reports_by_login, routine_menu_map):
@@ -61,6 +66,14 @@ class TrackingUserMapper(FakeUserMapper):
 
     def build_full_report(self, login):
         return self._reports_by_login[login]
+
+
+class SchemaAwareUserMapper(UserMapper):
+    def __init__(self):
+        super().__init__({}, object())
+
+    def resolve_col(self, table, candidates):
+        return candidates[0]
 
 
 class UserMapperAccessMatrixTest(unittest.TestCase):
@@ -216,6 +229,145 @@ class UserMapperAccessMatrixTest(unittest.TestCase):
             {"code": "112", "enabled": True, "description": "Gerar rel. no servidor"},
             {"code": "121", "enabled": True, "description": "Usa impressora no server"},
         ])
+
+    def test_report_suggests_partial_reuse_with_missing_permissions(self):
+        mapper = FakeUserMapper(
+            menu_tree=[
+                {
+                    "menu_name": "SIGACOM",
+                    "module": "COM",
+                    "items": [
+                        {"item_id": "1", "father_id": "", "function_code": "MATA010", "description": "Produtos", "browse_features": {}},
+                    ],
+                }
+            ],
+            group_privileges={
+                "MATA010": {
+                    "Visualizar": {"access": "1", "rule_name": "P_DESEJADO", "rule_id": "A9", "menu_oper": 2, "menu_def": "A010VIS"},
+                    "Alterar": {"access": "1", "rule_name": "P_DESEJADO", "rule_id": "A9", "menu_oper": 4, "menu_def": "A010ALT"},
+                }
+            },
+            existing_privilege_sets=[
+                {
+                    "rule_id": "A1",
+                    "rule_name": "P_EXISTENTE",
+                    "linked_users": [{"user_id": "000777", "login": "maria"}],
+                    "linked_groups": [{"group_id": "10", "group_name": "COMPRAS"}],
+                    "routines": [
+                        {
+                            "routine": "MATA010",
+                            "features": [
+                                {"feature": "Visualizar", "access": "1", "menu_oper": 2, "menu_def": "A010VIS"},
+                            ],
+                        }
+                    ],
+                }
+            ],
+        )
+
+        report = mapper.build_full_report("usr001")
+
+        recommendation = report["privilege_recommendations"]["suggested_base_rule"]
+        self.assertEqual(recommendation["rule_name"], "P_EXISTENTE")
+        self.assertEqual(recommendation["coverage_status"], "PARCIAL")
+        self.assertEqual(recommendation["matched_permissions_count"], 1)
+        self.assertEqual(recommendation["missing_permissions"], ["MATA010: Alterar"])
+        self.assertEqual(recommendation["linked_groups"], [{"group_id": "10", "group_name": "COMPRAS"}])
+
+    def test_report_flags_exact_reuse_with_excess_permissions(self):
+        mapper = FakeUserMapper(
+            menu_tree=[
+                {
+                    "menu_name": "SIGACOM",
+                    "module": "COM",
+                    "items": [
+                        {"item_id": "1", "father_id": "", "function_code": "MATA010", "description": "Produtos", "browse_features": {}},
+                    ],
+                }
+            ],
+            group_privileges={
+                "MATA010": {
+                    "Visualizar": {"access": "1", "rule_name": "P_DESEJADO", "rule_id": "A9", "menu_oper": 2, "menu_def": "A010VIS"},
+                }
+            },
+            existing_privilege_sets=[
+                {
+                    "rule_id": "A1",
+                    "rule_name": "P_EXISTENTE_FULL",
+                    "linked_users": [{"user_id": "000777", "login": "maria"}],
+                    "linked_groups": [],
+                    "routines": [
+                        {
+                            "routine": "MATA010",
+                            "features": [
+                                {"feature": "Visualizar", "access": "1", "menu_oper": 2, "menu_def": "A010VIS"},
+                                {"feature": "Excluir", "access": "1", "menu_oper": 5, "menu_def": "A010DEL"},
+                            ],
+                        }
+                    ],
+                }
+            ],
+        )
+
+        report = mapper.build_full_report("usr001")
+
+        recommendation = report["privilege_recommendations"]["suggested_base_rule"]
+        self.assertEqual(recommendation["rule_name"], "P_EXISTENTE_FULL")
+        self.assertEqual(recommendation["coverage_status"], "EXATA")
+        self.assertTrue(recommendation["has_excess_permissions"])
+        self.assertEqual(recommendation["excess_permissions"], ["MATA010: Excluir"])
+
+    def test_build_full_report_ignores_existing_privilege_inventory_failure(self):
+        mapper = FakeUserMapper(
+            menu_tree=[
+                {
+                    "menu_name": "SIGACOM",
+                    "module": "COM",
+                    "items": [
+                        {"item_id": "1", "father_id": "", "function_code": "MATA010", "description": "Produtos", "browse_features": {}},
+                    ],
+                }
+            ],
+            group_privileges={
+                "MATA010": {
+                    "Visualizar": {"access": "1", "rule_name": "ALLOW", "rule_id": "A1", "menu_oper": 2, "menu_def": "A010VIS"}
+                }
+            },
+        )
+
+        with patch.object(FakeUserMapper, "map_existing_privilege_sets", side_effect=KeyError("RL__ID")):
+            report = mapper.build_full_report("usr001")
+
+        self.assertEqual(report["total_routines"], 1)
+        self.assertEqual(report["routines_summary"][0]["effective_access"], "PERMITIDO")
+        self.assertEqual(report["existing_privilege_sets"], [])
+        self.assertIsNone(report["privilege_recommendations"]["suggested_base_rule"])
+
+    def test_map_user_privileges_direct_reads_rule_id_from_selected_feature_rows(self):
+        mapper = SchemaAwareUserMapper()
+
+        def fake_fetch_dicts(conn, query, params=()):
+            if "FROM SYS_RULES_USR_RULES" in query:
+                return [{"USR_RL_ID": "A1"}]
+            if "FROM SYS_RULES WHERE" in query:
+                return [{"RL__ID": "A1", "RL__CODIGO": "P_EXISTENTE"}]
+            if "FROM SYS_RULES_FEATURES" in query:
+                self.assertIn("SELECT RL__ID,", query)
+                return [{
+                    "RL__ID": "A1",
+                    "RL__ROTINA": "MATA010",
+                    "RL__DESMDEF": "Visualizar",
+                    "RL__ACESSO": "1",
+                    "RL__MENUOPER": 2,
+                    "RL__MENUDEF": "A010VIS",
+                }]
+            return []
+
+        with patch("src.user_mapper.fetch_dicts", side_effect=fake_fetch_dicts):
+            privileges = mapper.map_user_privileges_direct("000001")
+
+        self.assertEqual(privileges["MATA010"]["Visualizar"]["rule_id"], "A1")
+        self.assertEqual(privileges["MATA010"]["Visualizar"]["rule_name"], "P_EXISTENTE")
 
 
 if __name__ == "__main__":

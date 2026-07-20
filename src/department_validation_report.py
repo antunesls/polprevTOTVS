@@ -1,4 +1,6 @@
 import os
+import re
+import unicodedata
 
 
 def _escape_html(value):
@@ -13,10 +15,13 @@ def _escape_html(value):
 
 def _slug_department(value):
     text = str(value or "SEM_DEPARTAMENTO").strip() or "SEM_DEPARTAMENTO"
+    text = unicodedata.normalize("NFKD", text)
+    text = "".join(ch for ch in text if not unicodedata.combining(ch))
     invalid = '<>:"/\\|?*'
     for char in invalid:
         text = text.replace(char, "_")
-    return text.upper()
+    text = re.sub(r"\s+", "_", text).strip("_")
+    return text.upper() or "SEM_DEPARTAMENTO"
 
 
 def _allowed_routines(report):
@@ -107,6 +112,16 @@ def _render_user_page(report):
         f"<div class=\"meta\"><strong>Rotinas liberadas:</strong> {len(allowed)}</div>",
     ]
 
+    org_context = report.get("organizational_context") or {}
+    created_sets = [str(item).strip() for item in org_context.get("global_created_sets", []) if str(item).strip()]
+    reused_rules = [str(item).strip() for item in org_context.get("reused_existing_rules", []) if str(item).strip()]
+    if created_sets or reused_rules:
+        header.append("<div class=\"meta\"><strong>Contexto organizacional:</strong></div>")
+        if created_sets:
+            header.append(f"<div class=\"meta\"><strong>Conjuntos globais:</strong> {_escape_html(', '.join(created_sets))}</div>")
+        if reused_rules:
+            header.append(f"<div class=\"meta\"><strong>Regras reaproveitadas:</strong> {_escape_html(', '.join(reused_rules))}</div>")
+
     if not allowed:
         body = '<div class="empty">Nenhuma permissao liberada encontrada</div>'
     else:
@@ -174,6 +189,12 @@ th {{ background: #f1f3f5; }}
 
 def generate_department_validation_reports(reports, output_dir, empresa_name=""):
     os.makedirs(output_dir, exist_ok=True)
+    for file_name in os.listdir(output_dir):
+        if file_name.lower().endswith(".html"):
+            try:
+                os.remove(os.path.join(output_dir, file_name))
+            except OSError:
+                pass
     output_paths = []
     for department, department_reports in sorted(_grouped_reports(reports).items()):
         file_name = f"{_slug_department(department)}.html"

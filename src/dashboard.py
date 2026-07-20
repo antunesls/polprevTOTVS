@@ -1,6 +1,7 @@
 import json
 import os
 from collections import Counter
+from html import escape
 from src.config import OUTPUT_DIR
 
 
@@ -113,6 +114,67 @@ def generate_html(report_path):
                 label += f" - {desc}"
             parts.append(f'<span class="access-chip">{label}</span>')
         access_codes_html = "".join(parts)
+
+    privilege_recommendations = report.get("privilege_recommendations") or {}
+    suggested_base_rule = privilege_recommendations.get("suggested_base_rule") or {}
+    requested_permissions = privilege_recommendations.get("requested_permissions") or []
+
+    privilege_recommendation_html = '<p class="muted">Nenhuma sugestao de reaproveitamento encontrada.</p>'
+    if suggested_base_rule:
+        coverage_map = {
+            "EXATA": "Cobertura exata",
+            "PARCIAL": "Cobertura parcial",
+            "NENHUMA": "Sem cobertura",
+        }
+        linked_users = suggested_base_rule.get("linked_users") or []
+        linked_groups = suggested_base_rule.get("linked_groups") or []
+        missing_permissions = suggested_base_rule.get("missing_permissions") or []
+        excess_permissions = suggested_base_rule.get("excess_permissions") or []
+        coverage_status = str(suggested_base_rule.get("coverage_status") or "").upper()
+
+        action_label = "Avaliar nova regra"
+        action_detail = "Nenhuma regra existente cobre o conjunto solicitado."
+        if coverage_status == "EXATA":
+            action_label = "Reaproveitar sem ajuste"
+            if excess_permissions:
+                action_detail = "A regra cobre o necessario, mas concede acessos extras que exigem validacao."
+            else:
+                action_detail = "A regra existente ja cobre integralmente o conjunto solicitado."
+        elif coverage_status == "PARCIAL":
+            action_label = "Reaproveitar e complementar"
+            action_detail = "Use a regra existente como base e complemente apenas as permissoes faltantes."
+
+        def _render_people(items, key_primary, key_secondary):
+            labels = []
+            for item in items:
+                primary = str(item.get(key_primary) or "").strip()
+                secondary = str(item.get(key_secondary) or "").strip()
+                label = primary or secondary
+                if primary and secondary and secondary != primary:
+                    label = f"{primary} ({secondary})"
+                if label:
+                    labels.append(f'<span class="access-chip">{escape(label)}</span>')
+            return "".join(labels) if labels else '<span class="muted">Nenhum vinculo encontrado.</span>'
+
+        def _render_perm_list(items, css_class):
+            if not items:
+                return '<span class="muted">Nenhum item.</span>'
+            return "".join(f'<span class="perm-chip {css_class}">{escape(str(item))}</span>' for item in items)
+
+        privilege_recommendation_html = (
+            '<div class="reuse-box">'
+            f'<div class="reuse-header"><div><strong>{escape(str(suggested_base_rule.get("rule_name") or ""))}</strong></div>'
+            f'<span class="reuse-badge reuse-{str(suggested_base_rule.get("coverage_status") or "").lower()}">{coverage_map.get(str(suggested_base_rule.get("coverage_status") or "").upper(), "Cobertura")}</span></div>'
+            f'<p class="muted">Permissoes atendidas: {suggested_base_rule.get("matched_permissions_count", 0)} de {suggested_base_rule.get("requested_permissions_count", len(requested_permissions))}</p>'
+            f'<div class="action-callout"><strong>{escape(action_label)}</strong><span>{escape(action_detail)}</span></div>'
+            '<div class="reuse-grid">'
+            f'<div><h3>Grupos vinculados</h3>{_render_people(linked_groups, "group_name", "group_id")}</div>'
+            f'<div><h3>Usuarios vinculados</h3>{_render_people(linked_users, "login", "user_id")}</div>'
+            '</div>'
+            f'<div class="reuse-block"><h3>Complementos necessarios</h3>{_render_perm_list(missing_permissions, "perm-missing")}</div>'
+            f'<div class="reuse-block"><h3>Acessos excedentes</h3>{_render_perm_list(excess_permissions, "perm-excess")}</div>'
+            '</div>'
+        )
 
     table_rows = ""
     browse_routines_count = 0
@@ -240,8 +302,24 @@ tr:hover {{ background:#1c2129; }}
 
 .access-chip {{ display:inline-block; margin:4px 6px 0 0; padding:6px 10px; border-radius:999px; background:#0d1117; border:1px solid #30363d; color:#c9d1d9; font-size:12px; }}
 .muted {{ color:#8b949e; font-size:13px; }}
+.reuse-box {{ border:1px solid #30363d; border-radius:10px; padding:16px; background:#0d1117; }}
+.reuse-header {{ display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:10px; flex-wrap:wrap; }}
+.reuse-grid {{ display:grid; grid-template-columns:1fr 1fr; gap:16px; margin:14px 0; }}
+.reuse-grid h3, .reuse-block h3 {{ font-size:13px; color:#8b949e; margin-bottom:8px; }}
+.reuse-block + .reuse-block {{ margin-top:14px; }}
+.action-callout {{ margin-top:12px; padding:12px 14px; border-radius:8px; background:#161b22; border-left:4px solid #58a6ff; display:flex; flex-direction:column; gap:4px; }}
+.action-callout strong {{ color:#c9d1d9; font-size:14px; }}
+.action-callout span {{ color:#8b949e; font-size:12px; }}
+.reuse-badge {{ display:inline-block; padding:4px 10px; border-radius:999px; font-size:12px; font-weight:600; }}
+.reuse-exata {{ background:#0d2818; color:#3fb950; }}
+.reuse-parcial {{ background:#3a2c10; color:#e3b341; }}
+.reuse-nenhuma {{ background:#2d1d1d; color:#ff7b72; }}
+.perm-chip {{ display:inline-block; margin:4px 6px 0 0; padding:6px 10px; border-radius:8px; font-size:12px; border:1px solid #30363d; }}
+.perm-missing {{ background:#3a2c10; color:#e3b341; }}
+.perm-excess {{ background:#2d1d1d; color:#ff7b72; }}
 
 .footer {{ text-align:center; color:#484f58; font-size:12px; margin-top:32px; }}
+@media (max-width: 900px) {{ .reuse-grid {{ grid-template-columns:1fr; }} }}
 </style>
 </head>
 <body>
@@ -279,6 +357,11 @@ tr:hover {{ background:#1c2129; }}
 <div class="section">
   <h2>Codigos SYS_USR_ACCESS</h2>
   {access_codes_html}
+</div>
+
+<div class="section">
+  <h2>Sugestao de Reaproveitamento</h2>
+  {privilege_recommendation_html}
 </div>
 
 <div class="section">

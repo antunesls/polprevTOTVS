@@ -247,6 +247,13 @@ class OrganizationalPrivilegeGenerator:
 
     def _review_llm_clusters(self, llm_clusters, auto_accept=False):
         G = C["green"]; CY = C["cyan"]; Y = C["yellow"]; R = C["reset"]; D = C["dim"]; B = C["bold"]
+        existing_rules = None
+        if self.conn is not None:
+            try:
+                from src.tier3 import load_existing_rules, match_profile_to_existing_rules
+                existing_rules = load_existing_rules(self.conn)
+            except Exception:
+                existing_rules = None
 
         print()
         for idx, c in enumerate(llm_clusters, 1):
@@ -291,6 +298,16 @@ class OrganizationalPrivilegeGenerator:
                 name = f"P_CJ_{name}"
             if len(name) > 20:
                 name = name[:20]
+
+            if not c.get("reuses_existing_rule") and existing_rules:
+                try:
+                    from src.tier3 import match_profile_to_existing_rules
+                    reused_rule = match_profile_to_existing_rules(c.get("routines", c.get("common_routines", [])), existing_rules)
+                except Exception:
+                    reused_rule = None
+                if reused_rule:
+                    c["reuses_existing_rule"] = reused_rule
+                    c["rule_status_label"] = f"Reaproveita {reused_rule}"
 
             self.tier3_routines[name] = {
                 "routines": list(c.get("routines", c.get("common_routines", []))),
@@ -783,3 +800,240 @@ class OrganizationalPrivilegeGenerator:
             lines.append(f"INSERT INTO SYS_RULES_TRANSACT ({', '.join(insert_cols)})")
             lines.append(f"VALUES ({', '.join(insert_vals)});")
             self._total_transacts += 1
+
+
+def generate_delta_sql(inventory, schema, empresa_name):
+    from src.discovery import column_exists
+    from src.privilege_generator import extract_auto_rule_sequence, format_auto_rule_id
+
+    def _resolve(table, candidates):
+        return column_exists(schema, table, candidates)
+
+    def _sanitize(value):
+        if value is None:
+            return "NULL"
+        if isinstance(value, (int, float)):
+            return str(value)
+        return "'" + str(value).replace("'", "''") + "'"
+
+    rules = inventory.get("rules", []) or []
+    deleted_bindings = inventory.get("deleted_bindings", []) or []
+
+    rules_pk = _resolve("SYS_RULES", ["RL__ID", "RUL_ID", "ID"])
+    rules_name = _resolve("SYS_RULES", ["RL__CODIGO", "RUL_NAME", "NAME", "RULES_NAME"])
+    rules_type = _resolve("SYS_RULES", ["RUL_TYPE", "TYPE", "RULES_TYPE"])
+    rules_desc = _resolve("SYS_RULES", ["RL__DESCRI", "RUL_DESCRIPTION", "DESCRIPTION", "RULES_DESC"])
+
+    fet_pk = _resolve("SYS_RULES_FEATURES", ["RL__ITEM", "FET_ID", "ID", "RFE_ID"])
+    fet_rul = _resolve("SYS_RULES_FEATURES", ["RL__ID", "FET_RUL_ID", "RUL_ID", "RFE_RUL_ID"])
+    fet_func = _resolve("SYS_RULES_FEATURES", ["RL__ROTINA", "FET_FUNCTION", "FUNCTION", "RFE_FUNCTION", "RFE_ROTINA"])
+    fet_feat = _resolve("SYS_RULES_FEATURES", ["RL__DESMDEF", "FET_FEATURE", "FEATURE", "RFE_FEATURE", "RFE_DESMDEF"])
+    fet_access = _resolve("SYS_RULES_FEATURES", ["RL__ACESSO", "FET_ACCESS", "ACCESS", "RFE_ACCESS", "RFE_ACESSO"])
+    fet_menuoper = _resolve("SYS_RULES_FEATURES", ["RL__MENUOPER", "MENUOPER"])
+    fet_menudef = _resolve("SYS_RULES_FEATURES", ["RL__MENUDEF", "MENUDEF"])
+
+    trn_rul = _resolve("SYS_RULES_TRANSACT", ["RL__ID", "RUL_ID", "ID"])
+    trn_func = _resolve("SYS_RULES_TRANSACT", ["RL__ROTINA", "FUNCTION", "ROTINA"])
+    trn_desc = _resolve("SYS_RULES_TRANSACT", ["RL__DESROT", "DESCRIPTION", "DESROT"])
+    trn_access = _resolve("SYS_RULES_TRANSACT", ["RL__ACESSO", "ACCESS"])
+    trn_checksum = _resolve("SYS_RULES_TRANSACT", ["RL__CHKSUM", "CHKSUM"])
+    trn_del = _resolve("SYS_RULES_TRANSACT", ["D_E_L_E_T_"])
+
+    usr_usr_col = _resolve("SYS_RULES_USR_RULES", ["USER_ID", "USR_ID", "URR_USR_ID", "RUR_USR_ID"])
+    usr_rul_col = _resolve("SYS_RULES_USR_RULES", ["USR_RL_ID", "RUL_ID", "URR_RUL_ID", "RUR_RUL_ID"])
+
+    rule_seq = 1
+    feat_item = 1
+    total_features = 0
+    total_transacts = 0
+    total_user_links = 0
+    total_deletes = 0
+
+    lines = []
+    lines.append("-- ==============================================")
+    lines.append("-- Script de privilegios DELTA")
+    lines.append(f"-- Empresa: {empresa_name}")
+    lines.append("-- Gerado a partir do inventario consolidado")
+    lines.append("-- ==============================================")
+    lines.append("")
+
+    has_deletes = bool(deleted_bindings) or any(r.get("_marked_for_delete") for r in rules)
+    if has_deletes:
+        lines.append("-- ⚠️  ATENCAO  ⚠️")
+        lines.append("-- Este script contem comandos de SOFT DELETE (D_E_L_E_T_ = '*').")
+        lines.append("-- Revise cuidadosamente antes de executar em producao.")
+        lines.append("")
+
+    lines.append("BEGIN TRANSACTION")
+    lines.append("")
+
+    new_rule_id = None
+
+    for rule in rules:
+        if rule.get("_marked_for_delete"):
+            lines.append(f"-- REGRA MARCADA PARA REMOCAO: {rule.get('rule_name', '')}")
+            lines.append("-- (soft delete nao implementado automaticamente para regras inteiras)")
+            lines.append("")
+            continue
+
+        action = rule.get("action", "MANTER")
+        source = rule.get("source", "")
+
+        if action == "MANTER" and source == "EXISTENTE":
+            lines.append(f"-- Regra existente sem alteracoes: {rule.get('rule_name', '')}")
+            if rule.get("has_excess"):
+                lines.append(f"-- ALERTA: regra concede acessos extras alem do necessario")
+            lines.append("")
+            continue
+
+        if action in ("CRIAR", "COMPLEMENTAR"):
+            if action == "CRIAR":
+                new_rule_id = format_auto_rule_id(rule_seq)
+                rule_seq += 1
+                insert_cols = []
+                insert_vals = []
+                if rules_pk:
+                    insert_cols.append(rules_pk)
+                    insert_vals.append(_sanitize(new_rule_id))
+                if rules_name:
+                    insert_cols.append(rules_name)
+                    insert_vals.append(_sanitize(rule.get("rule_name", "")))
+                if rules_desc:
+                    insert_cols.append(rules_desc)
+                    insert_vals.append(_sanitize(rule.get("rule_description", "")))
+                if rules_type:
+                    insert_cols.append(rules_type)
+                    insert_vals.append("' '")
+                lines.append(f"-- NOVA REGRA: {rule.get('rule_name', '')}")
+                lines.append(f"INSERT INTO SYS_RULES ({', '.join(insert_cols)})")
+                lines.append(f"VALUES ({', '.join(insert_vals)});")
+                lines.append("")
+            else:
+                lines.append(f"-- REGRA EXISTENTE: {rule.get('rule_name', '')} — apenas complementos abaixo")
+                lines.append("")
+                new_rule_id = rule.get("rule_id", "")
+
+            for rt in rule.get("routines", []) or []:
+                rt_code = rt.get("routine", "")
+                rt_desc = rt.get("description", "")
+                features = rt.get("features", []) or []
+                missing_features = [f for f in features if f.get("status") == "FALTANTE"]
+
+                if missing_features and action == "COMPLEMENTAR":
+                    lines.append(f"-- Complemento: {rt_code}")
+                    trn_cols = []
+                    trn_vals = []
+                    if trn_rul:
+                        trn_cols.append(trn_rul)
+                        trn_vals.append(_sanitize(new_rule_id))
+                    if trn_func:
+                        trn_cols.append(trn_func)
+                        trn_vals.append(_sanitize(rt_code))
+                    if trn_desc:
+                        trn_cols.append(trn_desc)
+                        trn_vals.append(_sanitize(rt_desc[:40] if rt_desc else ""))
+                    if trn_access:
+                        trn_cols.append(trn_access)
+                        trn_vals.append(_sanitize("1"))
+                    if trn_checksum:
+                        trn_cols.append(trn_checksum)
+                        trn_vals.append(_sanitize(""))
+                    if trn_del:
+                        trn_cols.append(trn_del)
+                        trn_vals.append(_sanitize(" "))
+                    if trn_cols:
+                        lines.append(f"INSERT INTO SYS_RULES_TRANSACT ({', '.join(trn_cols)})")
+                        lines.append(f"VALUES ({', '.join(trn_vals)});")
+                        total_transacts += 1
+
+                elif action == "CRIAR":
+                    trn_cols = []
+                    trn_vals = []
+                    if trn_rul:
+                        trn_cols.append(trn_rul)
+                        trn_vals.append(_sanitize(new_rule_id))
+                    if trn_func:
+                        trn_cols.append(trn_func)
+                        trn_vals.append(_sanitize(rt_code))
+                    if trn_desc:
+                        trn_cols.append(trn_desc)
+                        trn_vals.append(_sanitize(rt_desc[:40] if rt_desc else ""))
+                    if trn_access:
+                        trn_cols.append(trn_access)
+                        trn_vals.append(_sanitize("1"))
+                    if trn_checksum:
+                        trn_cols.append(trn_checksum)
+                        trn_vals.append(_sanitize(""))
+                    if trn_del:
+                        trn_cols.append(trn_del)
+                        trn_vals.append(_sanitize(" "))
+                    if trn_cols:
+                        lines.append(f"-- {rt_code} | {rt_desc}")
+                        lines.append(f"INSERT INTO SYS_RULES_TRANSACT ({', '.join(trn_cols)})")
+                        lines.append(f"VALUES ({', '.join(trn_vals)});")
+                        total_transacts += 1
+
+                for feat in features:
+                    if action == "COMPLEMENTAR" and feat.get("status") != "FALTANTE":
+                        continue
+                    insert_cols = []
+                    insert_vals = []
+                    if fet_pk:
+                        insert_cols.append(fet_pk)
+                        insert_vals.append(str(feat_item))
+                    if fet_rul:
+                        insert_cols.append(fet_rul)
+                        insert_vals.append(_sanitize(new_rule_id))
+                    if fet_func:
+                        insert_cols.append(fet_func)
+                        insert_vals.append(_sanitize(rt_code))
+                    if fet_feat:
+                        insert_cols.append(fet_feat)
+                        insert_vals.append(_sanitize(feat.get("feature", "")))
+                    if fet_access:
+                        insert_cols.append(fet_access)
+                        insert_vals.append(_sanitize(str(feat.get("access", "1"))))
+                    if fet_menuoper and feat.get("menu_oper") is not None:
+                        insert_cols.append(fet_menuoper)
+                        insert_vals.append(str(int(float(feat.get("menu_oper", 0)))))
+                    if fet_menudef and feat.get("menu_def"):
+                        insert_cols.append(fet_menudef)
+                        insert_vals.append(_sanitize(feat.get("menu_def", "")))
+                    lines.append(f"-- {rt_code} | {feat.get('feature', '')}")
+                    lines.append(f"INSERT INTO SYS_RULES_FEATURES ({', '.join(insert_cols)})")
+                    lines.append(f"VALUES ({', '.join(insert_vals)});")
+                    feat_item += 1
+                    total_features += 1
+                lines.append("")
+
+            for user in rule.get("users", []) or []:
+                login = user.get("login", user.get("user_id", ""))
+                uid = user.get("user_id", login)
+                lines.append(f"-- Vinculo: {login}")
+                lines.append(f"INSERT INTO SYS_RULES_USR_RULES ({usr_usr_col}, {usr_rul_col})")
+                lines.append(f"VALUES ({_sanitize(uid)}, {_sanitize(new_rule_id)});")
+                total_user_links += 1
+            lines.append("")
+
+    if deleted_bindings:
+        lines.append("-- ==============================================")
+        lines.append("-- SOFT DELETES (vinculos removidos)")
+        lines.append("-- ==============================================")
+        lines.append("")
+        for bind in deleted_bindings:
+            lines.append(f"-- Removendo: {bind.get('rule_name', '')} | user {bind.get('user_id', '')}")
+            lines.append(f"UPDATE {bind.get('table', 'SYS_RULES_USR_RULES')} SET D_E_L_E_T_ = '*' WHERE USER_ID = {_sanitize(bind.get('user_id', ''))};")
+            total_deletes += 1
+        lines.append("")
+
+    lines.append("COMMIT")
+    lines.append("")
+    lines.append(f"-- Total de regras novas criadas: {rule_seq - 1}")
+    lines.append(f"-- Total de features inseridas: {total_features}")
+    lines.append(f"-- Total de transacts inseridas: {total_transacts}")
+    lines.append(f"-- Total de vinculos de usuario: {total_user_links}")
+    if total_deletes:
+        lines.append(f"-- Total de soft deletes: {total_deletes}")
+    lines.append("-- ATENCAO: Verifique os valores antes de executar em producao!")
+
+    return "\n".join(lines)

@@ -116,7 +116,24 @@ def _routine_details_map(reports):
     return details
 
 
-def build_department_analysis(reports, existing_rules=None):
+def _clusters_for_department(dept_reports, global_clusters):
+    if not dept_reports or not global_clusters:
+        return []
+
+    dept_users = {report.get("user") for report in dept_reports if report.get("user")}
+    matches = []
+    for cluster in global_clusters or []:
+        cluster_users = {user for user in cluster.get("users", []) if user}
+        if dept_users & cluster_users:
+            matches.append(dict(cluster))
+    return matches
+
+
+def build_department_analysis(reports, existing_rules=None, global_clusters=None, min_users=None):
+    if min_users is None:
+        from src.config import department_min_users
+        min_users = department_min_users()
+
     reports = apply_department_canonicalization(reports)
     by_dept = {}
     for report in reports or []:
@@ -129,11 +146,18 @@ def build_department_analysis(reports, existing_rules=None):
         dept_common = set.intersection(*routine_sets) if routine_sets else set()
         tier2_map = {dept: dept_common}
         details = _routine_details_map(dept_reports)
-        profile_groups = build_equivalent_profile_groups(dept_reports, set(), tier2_map, existing_rules=existing_rules, routine_details=details)
+        profile_groups = build_equivalent_profile_groups(dept_reports, set(), tier2_map, min_users=min_users, existing_rules=existing_rules, routine_details=details)
         tier4_users = build_tier4_users(dept_reports, tier1_common=set(), tier2_routines_map=tier2_map, tier3_sets=profile_groups)
+        global_created_sets = _clusters_for_department(dept_reports, global_clusters)
+        global_reused_sets = [cluster for cluster in global_created_sets if cluster.get("reuses_existing_rule")]
         all_routines = set()
         for routines in routine_sets:
             all_routines.update(routines)
+
+        eligible_for_department_profile = len(dept_reports) >= min_users
+        skip_reason = ""
+        if not eligible_for_department_profile:
+            skip_reason = "MIN_USERS"
 
         result[dept] = {
             "total_users": len(dept_reports),
@@ -142,6 +166,11 @@ def build_department_analysis(reports, existing_rules=None):
             "tier1": [{"code": code, "desc": details.get(code, "")} for code in sorted(dept_common)],
             "profile_groups": profile_groups,
             "tier4_users": tier4_users,
+            "eligible_for_department_profile": eligible_for_department_profile,
+            "min_users_required": min_users,
+            "skip_reason": skip_reason,
+            "global_created_sets": global_created_sets,
+            "global_reused_sets": global_reused_sets,
         }
 
     return result
@@ -379,6 +408,8 @@ def normalize_tier3_sets(raw_sets, reports):
             "routines": routine_items,
             "users": users,
             **({"type": item.get("type")} if item.get("type") else {}),
+            **({"reuses_existing_rule": item.get("reuses_existing_rule")} if item.get("reuses_existing_rule") else {}),
+            **({"rule_status_label": item.get("rule_status_label")} if item.get("rule_status_label") else {}),
         })
 
     return normalized
@@ -445,14 +476,8 @@ def build_tier4_users(reports, tier1_common, tier2_routines_map, tier3_sets):
 def load_existing_rules(conn):
     rules = {}
     try:
-        from src.discovery import column_exists
         rul_pk_cols = ["RL__ID", "RUL_ID", "ID"]
         rul_name_cols = ["RL__CODIGO", "RUL_NAME", "NAME", "RULES_NAME"]
-        fet_rul_cols = ["RL__ID", "FET_RUL_ID", "RUL_ID", "RFE_RUL_ID"]
-        fet_func_cols = ["RL__ROTINA", "FET_FUNCTION", "FUNCTION", "RFE_FUNCTION", "RFE_ROTINA"]
-        fet_feat_cols = ["RL__DESMDEF", "FET_FEATURE", "FEATURE", "RFE_FEATURE", "RFE_DESMDEF"]
-        fet_access_cols = ["RL__ACESSO", "FET_ACCESS", "ACCESS", "RFE_ACCESS", "RFE_ACESSO"]
-        fet_del_cols = ["D_E_L_E_T_"]
 
         from src.database import fetch_dicts
 
@@ -487,14 +512,19 @@ def load_existing_rules(conn):
         return rules
 
     try:
+        feature_sample = fetch_dicts(conn, "SELECT * FROM SYS_RULES_FEATURES")
+        if not feature_sample:
+            return rules
+        fet_rul = next((c for c in ["RL__ID", "FET_RUL_ID", "RUL_ID", "RFE_RUL_ID"] if c in feature_sample[0]), None)
+        if not fet_rul:
+            return rules
         placeholders = ",".join("?" for _ in rule_ids)
         feat_rows = fetch_dicts(conn,
-            f"SELECT * FROM SYS_RULES_FEATURES WHERE {fet_rul_cols[0] if 'RL__ID' in (feat_rows[0] if (feat_rows := [{}]) else {}) else 'RL__ID'} IN ({placeholders})",
+            f"SELECT * FROM SYS_RULES_FEATURES WHERE {fet_rul} IN ({placeholders})",
             rule_ids)
     except Exception:
         return rules
 
-    fet_rul = next((c for c in ["RL__ID", "FET_RUL_ID", "RUL_ID"] if feat_rows and c in feat_rows[0]), None)
     fet_func = next((c for c in ["RL__ROTINA", "FET_FUNCTION", "FUNCTION"] if feat_rows and c in feat_rows[0]), None)
     fet_feat = next((c for c in ["RL__DESMDEF", "FET_FEATURE", "FEATURE"] if feat_rows and c in feat_rows[0]), None)
     fet_access = next((c for c in ["RL__ACESSO", "FET_ACCESS", "ACCESS"] if feat_rows and c in feat_rows[0]), None)

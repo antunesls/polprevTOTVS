@@ -43,6 +43,13 @@ th {{ color: #8da2b5; text-transform: uppercase; font-size: 10px; background: #1
 .exclusive {{ color: #e74c3c; font-family: monospace; font-size: 11px; }}
 .reuse-badge {{ display: inline-block; background: #27ae60; color: #fff; border-radius: 4px; padding: 1px 6px; font-size: 9px; font-weight: 800; margin-left: 6px; }}
 .new-badge {{ display: inline-block; background: #e67e22; color: #fff; border-radius: 4px; padding: 1px 6px; font-size: 9px; font-weight: 800; margin-left: 6px; }}
+.reuse-list {{ background: #16213e; border: 1px solid #0f3460; border-radius: 10px; padding: 14px; margin-bottom: 12px; }}
+.reuse-item {{ padding: 8px 0; border-bottom: 1px solid #1c2833; }}
+.reuse-item:last-child {{ border-bottom: none; padding-bottom: 0; }}
+.reuse-rule {{ color: #27ae60; font-weight: 800; font-size: 13px; }}
+.reuse-meta {{ color: #8da2b5; font-size: 11px; margin-top: 4px; }}
+.status-box {{ background: #16213e; border: 1px solid #0f3460; border-radius: 10px; padding: 14px; margin-bottom: 12px; }}
+.status-warn {{ color: #f1c40f; font-weight: 700; }}
 .empty {{ color: #4a5a6a; font-style: italic; padding: 12px; }}
 </style>
 </head>
@@ -84,7 +91,10 @@ function renderDepartment() {{
     + kpi((data.profile_groups || []).length, 'Perfis equivalentes')
     + kpi(tier4Open, 'Usuarios com sobras')
     + '</div>';
+  html += renderDepartmentStatus(data);
   html += '<h2 class="section-title">Perfis Equivalentes</h2>';
+  html += renderReusedRules(data.profile_groups || []);
+  html += renderGlobalCreatedSets(data.global_created_sets || []);
   html += renderProfiles(data.profile_groups || []);
   html += '<h2 class="section-title">Tier 4 - Sobras Individuais</h2>';
   html += renderTier4(data.tier4_users || []);
@@ -113,6 +123,40 @@ function renderProfiles(groups) {{
       + '<div class="users">' + (group.users || []).map(u => '<span class="user">' + escapeHtml(u) + '</span>').join('') + '</div>'
       + '</div>';
   }}).join('') + '</div>';
+}}
+
+function renderDepartmentStatus(data) {{
+  if (data.eligible_for_department_profile !== false) return '';
+  return '<div class="status-box"><div class="status-warn">Departamento abaixo do minimo para perfil equivalente</div>'
+    + '<div class="reuse-meta">Usuarios encontrados: ' + (data.total_users || 0) + ' | Minimo requerido: ' + (data.min_users_required || 0) + '</div></div>';
+}}
+
+function renderReusedRules(groups) {{
+  const reused = (groups || []).filter(group => group.reuses_existing_rule);
+  if (!reused.length) return '';
+
+  return '<div class="reuse-list"><h2 class="section-title" style="margin-top:0">Conjuntos preexistentes reaproveitados</h2>'
+    + reused.map(group =>
+      '<div class="reuse-item">'
+      + '<div class="reuse-rule">' + escapeHtml(group.reuses_existing_rule || '') + '</div>'
+      + '<div class="reuse-meta">Perfil sugerido: ' + escapeHtml(group.name || '') + ' | Usuarios: ' + ((group.users || []).length) + ' | Rotinas: ' + ((group.routines || []).length) + '</div>'
+      + '</div>'
+    ).join('')
+    + '</div>';
+}}
+
+function renderGlobalCreatedSets(groups) {{
+  if (!groups.length) return '';
+
+  return '<div class="reuse-list"><h2 class="section-title" style="margin-top:0">Conjuntos globais criados</h2>'
+    + groups.map(group =>
+      '<div class="reuse-item">'
+      + '<div class="reuse-rule">' + escapeHtml(group.name || '') + '</div>'
+      + '<div class="reuse-meta">Usuarios: ' + ((group.users || []).length) + ' | Rotinas: ' + ((group.routines || []).length)
+      + (group.reuses_existing_rule ? ' | Reaproveita: ' + escapeHtml(group.reuses_existing_rule) : '') + '</div>'
+      + '</div>'
+    ).join('')
+    + '</div>';
 }}
 
 function renderTier4(rows) {{

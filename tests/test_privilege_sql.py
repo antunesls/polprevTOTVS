@@ -139,6 +139,126 @@ class OrganizationalSqlTest(unittest.TestCase):
         self.assertIn("'Movimentos Bancarios - Agrupado por Banc'", sql)
         self.assertNotIn("'Movimentos Bancarios - Agrupado por Bancos'", sql)
 
+    def test_review_loaded_clusters_marks_reuse_from_existing_rules(self):
+        report = build_report()
+        reports = [report]
+        generator = FakeOrganizationalPrivilegeGenerator(reports, SCHEMA, "TESTE", conn=object())
+        generator.reports = reports
+
+        clusters = [{
+            "name": "P_CJ_EXISTENTE",
+            "routines": [{"code": "MATA010", "permissions": ["Visualizar"]}],
+            "users": ["usr001"],
+        }]
+
+        with patch("src.tier3.load_existing_rules", return_value={"P_EXISTENTE": {"MATA010": {"Visualizar"}}}):
+            generator._review_llm_clusters(clusters, auto_accept=True)
+
+        self.assertEqual(generator.tier3_routines["P_CJ_EXISTENTE"]["reuses_existing_rule"], "P_EXISTENTE")
+
+
+class DeltaSqlTest(unittest.TestCase):
+    def test_delta_sql_generates_inserts_for_new_rules_only(self):
+        inventory = {
+            "rules": [
+                {
+                    "rule_id": None, "rule_name": "P_NOVO", "rule_description": "Nova regra",
+                    "source": "NOVO", "tier": "TIER3", "action": "CRIAR", "has_excess": False,
+                    "users": [{"user_id": "000001", "login": "usr001"}],
+                    "groups": [],
+                    "routines": [
+                        {
+                            "routine": "MATA010", "description": "Produtos",
+                            "features": [
+                                {"feature": "Visualizar", "access": "1", "menu_oper": 2, "menu_def": "A010VIS", "status": "FALTANTE"}
+                            ],
+                            "status": "FALTANTE",
+                        }
+                    ],
+                }
+            ],
+            "deleted_bindings": [],
+        }
+
+        from src.organizational_privileges import generate_delta_sql
+        sql = generate_delta_sql(inventory, SCHEMA, "TESTE")
+
+        self.assertIn("INSERT INTO SYS_RULES (", sql)
+        self.assertIn("P_NOVO", sql)
+        self.assertIn("INSERT INTO SYS_RULES_FEATURES", sql)
+        self.assertIn("INSERT INTO SYS_RULES_TRANSACT", sql)
+        self.assertIn("INSERT INTO SYS_RULES_USR_RULES", sql)
+
+    def test_delta_sql_skips_maintain_rules(self):
+        inventory = {
+            "rules": [
+                {
+                    "rule_id": None, "rule_name": "P_MANTER", "rule_description": "",
+                    "source": "EXISTENTE", "tier": "EXISTENTE", "action": "MANTER", "has_excess": False,
+                    "users": [], "groups": [], "routines": [],
+                }
+            ],
+            "deleted_bindings": [],
+        }
+
+        from src.organizational_privileges import generate_delta_sql
+        sql = generate_delta_sql(inventory, SCHEMA, "TESTE")
+
+        self.assertIn("Regra existente sem alteracoes", sql)
+        self.assertNotIn("INSERT INTO SYS_RULES (", sql)
+
+    def test_delta_sql_generates_only_complement_for_partial_rules(self):
+        inventory = {
+            "rules": [
+                {
+                    "rule_id": "A00001", "rule_name": "P_PARCIAL", "rule_description": "",
+                    "source": "EXISTENTE", "tier": "TIER3", "action": "COMPLEMENTAR", "has_excess": False,
+                    "users": [{"user_id": "000002", "login": "maria"}],
+                    "groups": [],
+                    "routines": [
+                        {
+                            "routine": "MATA010", "description": "Produtos",
+                            "features": [
+                                {"feature": "Visualizar", "access": "1", "menu_oper": 2, "menu_def": "A010VIS", "status": "EXISTENTE"},
+                                {"feature": "Alterar", "access": "1", "menu_oper": 4, "menu_def": "A010ALT", "status": "FALTANTE"},
+                            ],
+                            "status": "PARCIAL",
+                        }
+                    ],
+                }
+            ],
+            "deleted_bindings": [],
+        }
+
+        from src.organizational_privileges import generate_delta_sql
+        sql = generate_delta_sql(inventory, SCHEMA, "TESTE")
+
+        self.assertNotIn("INSERT INTO SYS_RULES (", sql)
+        self.assertIn("REGRA EXISTENTE: P_PARCIAL", sql)
+        self.assertIn("INSERT INTO SYS_RULES_FEATURES", sql)
+        self.assertIn("INSERT INTO SYS_RULES_USR_RULES", sql)
+
+    def test_delta_sql_generates_soft_deletes_with_warning(self):
+        inventory = {
+            "rules": [
+                {
+                    "rule_id": "A00001", "rule_name": "P_REMOVIDA", "rule_description": "",
+                    "source": "EXISTENTE", "tier": "TIER3", "action": "MANTER", "has_excess": False,
+                    "users": [], "groups": [], "routines": [],
+                }
+            ],
+            "deleted_bindings": [
+                {"rule_name": "P_REMOVIDA", "user_id": "000001", "table": "SYS_RULES_USR_RULES"}
+            ],
+        }
+
+        from src.organizational_privileges import generate_delta_sql
+        sql = generate_delta_sql(inventory, SCHEMA, "TESTE")
+
+        self.assertIn("SOFT DELETE", sql)
+        self.assertIn("ATENCAO", sql)
+        self.assertIn("D_E_L_E_T_", sql)
+
 
 if __name__ == "__main__":
     unittest.main()
