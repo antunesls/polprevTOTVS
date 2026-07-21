@@ -586,7 +586,7 @@ class Tier3PromptTest(unittest.TestCase):
         self.assertNotIn("Usuario: joao", prompt)
 
     def test_prompt_limits_large_routine_catalog(self):
-        from src.llm_categorizer import MAX_PROMPT_ROUTINES, build_prompt
+        from src.llm_categorizer import build_prompt
 
         users_data = []
         for user_idx in range(3):
@@ -595,9 +595,9 @@ class Tier3PromptTest(unittest.TestCase):
                 routines.append(f"ROT{routine_idx:05d} - Descricao longa da rotina {routine_idx}")
             users_data.append({"user": f"u{user_idx}", "routines": routines})
 
-        prompt = build_prompt(users_data)
+        prompt = build_prompt(users_data, max_routines=500)
 
-        self.assertIn(f"Catalogo limitado as {MAX_PROMPT_ROUTINES} rotinas", prompt)
+        self.assertIn("Catalogo limitado as 500 rotinas", prompt)
         self.assertLess(len(prompt), 70000)
 
     def test_prompt_includes_permission_profiles(self):
