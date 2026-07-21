@@ -1056,6 +1056,12 @@ def run_scoped_admin(scope_type, scope_value, mapper=None, schema=None, conn=Non
                 error("Nenhum relatorio gerado. Abortando.")
                 return None
 
+            all_reports = _filter_ignored_group_users(all_reports)
+
+            if not all_reports:
+                error("Todos os usuarios do departamento foram ignorados pelo filtro de grupo. Abortando.")
+                return None
+
             all_reports = apply_department_canonicalization(all_reports)
 
             user_routine_sets = {}
@@ -1187,6 +1193,8 @@ def run_department_validation_only():
             if not all_reports:
                 warn("Nenhum relatorio gerado. Abortando.")
                 return
+
+            all_reports = _filter_ignored_group_users(all_reports)
 
             filtered_reports = [rep for rep in all_reports if len(rep.get("routines_summary", [])) > 0]
             if not filtered_reports:
@@ -2324,6 +2332,8 @@ def run_llm_preview():
                 warn("Nenhum relatorio gerado. Abortando.")
                 return
 
+            all_reports = _filter_ignored_group_users(all_reports)
+
             zero_routine_users = []
             filtered_reports = []
             for rep in all_reports:
@@ -2884,6 +2894,8 @@ def run_generate_org_sql():
                 warn("Nenhum relatorio gerado. Abortando.")
                 return
 
+            all_reports = _filter_ignored_group_users(all_reports)
+
             zero_routine_users = [rep["user"] for rep in all_reports if len(rep.get("routines_summary", [])) == 0]
             all_reports = [rep for rep in all_reports if len(rep.get("routines_summary", [])) > 0]
             if zero_routine_users:
@@ -2967,6 +2979,8 @@ def run_batch_organizational(choice):
             if not all_reports:
                 warn("Nenhum relatorio gerado. Abortando.")
                 return
+
+            all_reports = _filter_ignored_group_users(all_reports)
 
             zero_routine_users = []
             filtered_reports = []
