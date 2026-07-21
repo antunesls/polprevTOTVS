@@ -606,10 +606,65 @@ class OrganizationalPrivilegeGenerator:
             print(f"    {D}Rotinas: {', '.join(sample)}{'...' if len(promoted_routines) > 6 else ''}{R}")
             promoted_count += 1
 
-        if promoted_count:
+        singles_promoted = 0
+        already_promoted = set()
+        for info in self.tier3_routines.values():
+            for raw in info.get("routines", []):
+                already_promoted.add(routine_code(raw))
+
+        counted_routines = set()
+        for user_rt_set in self.tier4_routines.values():
+            counted_routines.update(user_rt_set)
+
+        for rt in sorted(counted_routines):
+            if rt in already_promoted:
+                continue
+
+            users = sorted(
+                user for user, user_rt_set in self.tier4_routines.items()
+                if rt in user_rt_set
+            )
+            if len(users) < min_users:
+                continue
+
+            prefix = rt[:4] if not rt or not rt[0].isdigit() else rt[:5]
+            domain_label = _prefix_domain_label(prefix)
+            rt_safe = rt[:15].replace(" ", "_")
+            name = f"P_CJ_{rt_safe}"[:20]
+            counter = 1
+            base_name = name
+            while name in self.tier3_routines:
+                name = f"{base_name[:17]}_{counter:02d}"[:20]
+                counter += 1
+
+            perms_union = set()
+            for user in users:
+                for rep in self.reports:
+                    if rep.get("user") == user:
+                        perms_union |= set(routine_permissions(
+                            {"routine": rt, "features": self._routine_features(rep, rt)}
+                        ))
+                        break
+
+            routines_out = [
+                {"code": rt, "permissions": sorted(perms_union)}
+                if perms_union
+                else rt
+            ]
+
+            self.tier3_routines[name] = {
+                "routines": routines_out,
+                "members": users,
+            }
+            print(f"  {G}Promovido individual {domain_label}: {name} ({len(users)} usuarios, rotina {rt}){R}")
+            singles_promoted += 1
+
+        if promoted_count or singles_promoted:
             self.tier4_routines = {}
             self._compute_tier4()
-            print(f"  {G}{promoted_count} conjuntos promovidos de residuais compartilhados para TIER3{R}")
+            total = promoted_count + singles_promoted
+            detail = f" ({promoted_count} pares + {singles_promoted} individuais)" if promoted_count and singles_promoted else ""
+            print(f"  {G}{total} conjuntos promovidos de residuais compartilhados para TIER3{detail}{R}")
 
     def _generate_sql(self):
         G = C["green"]; CY = C["cyan"]; R = C["reset"]; D = C["dim"]; B = C["bold"]; Y = C["yellow"]

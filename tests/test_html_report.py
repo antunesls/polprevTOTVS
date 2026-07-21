@@ -277,6 +277,84 @@ class AdminDashboardHtmlTest(unittest.TestCase):
         self.assertIn("joao", html)
         self.assertIn("000002", html)
 
+    def test_admin_html_has_merge_functions_and_button(self):
+        inventory = {
+            "rules": [
+                {"rule_id": None, "rule_name": "P_ALVO", "source": "NOVO", "tier": "TIER3", "action": "CRIAR", "users": [], "groups": [], "routines": []},
+                {"rule_id": None, "rule_name": "P_ORIGEM", "source": "NOVO", "tier": "TIER3", "action": "CRIAR", "users": [], "groups": [], "routines": []},
+            ]
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_path = Path(tmpdir) / "admin.html"
+            generate_admin_html(inventory, str(output_path), "TESTE")
+            html = output_path.read_text(encoding="utf-8")
+
+        self.assertIn("openMergeModal", html)
+        self.assertIn("mergeRuleInto", html)
+        self.assertIn("Incorporar", html)
+
+    def test_admin_merge_modal_shows_confirmation_about_removal(self):
+        inventory = {
+            "rules": [
+                {"rule_id": None, "rule_name": "P_ALVO", "source": "NOVO", "tier": "TIER3", "action": "CRIAR", "users": [], "groups": [], "routines": []},
+            ]
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_path = Path(tmpdir) / "admin.html"
+            generate_admin_html(inventory, str(output_path), "TESTE")
+            html = output_path.read_text(encoding="utf-8")
+
+        self.assertIn("remocao de vinculos", html)
+
+    def test_admin_merge_modal_excludes_self_and_marked_for_delete(self):
+        inventory = {
+            "rules": [
+                {"rule_id": None, "rule_name": "P_ALVO", "source": "NOVO", "tier": "TIER3", "action": "CRIAR", "users": [], "groups": [], "routines": []},
+                {"rule_id": None, "rule_name": "P_MARCADA", "source": "NOVO", "tier": "TIER3", "action": "CRIAR", "users": [], "groups": [], "routines": [{"routine": "MATA010", "features": []}], "_marked_for_delete": True},
+            ]
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_path = Path(tmpdir) / "admin.html"
+            generate_admin_html(inventory, str(output_path), "TESTE")
+            html = output_path.read_text(encoding="utf-8")
+
+        self.assertIn("_marked_for_delete", html)
+        self.assertIn("Nenhum outro conjunto disponivel", html)
+
+    def test_admin_merge_marks_source_for_deletion_and_sets_target_action(self):
+        inventory = {
+            "rules": [
+                {"rule_id": "A1", "rule_name": "P_ALVO", "source": "EXISTENTE", "tier": "TIER3", "action": "MANTER", "users": [{"user_id": "000001", "login": "joao"}], "groups": [], "routines": []},
+                {"rule_id": None, "rule_name": "P_ORIGEM", "source": "NOVO", "tier": "TIER4", "action": "CRIAR", "users": [{"user_id": "000002", "login": "maria"}], "groups": [], "routines": [{"routine": "MATA010", "description": "", "features": [{"feature": "Visualizar", "access": "1", "status": "FALTANTE"}], "status": "FALTANTE"}]},
+            ]
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_path = Path(tmpdir) / "admin.html"
+            generate_admin_html(inventory, str(output_path), "TESTE")
+            html = output_path.read_text(encoding="utf-8")
+
+        self.assertIn("mergeRuleInto", html)
+        self.assertIn("COMPLEMENTAR", html)
+        self.assertIn("_marked_for_delete=true", html)
+
+    def test_admin_merge_button_hidden_for_marked_for_delete_rules(self):
+        inventory = {
+            "rules": [
+                {"rule_id": None, "rule_name": "P_MARCADA", "source": "NOVO", "tier": "TIER4", "action": "CRIAR", "users": [], "groups": [], "routines": [{"routine": "MATA010", "features": []}], "_marked_for_delete": True},
+            ]
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_path = Path(tmpdir) / "admin.html"
+            generate_admin_html(inventory, str(output_path), "TESTE")
+            html = output_path.read_text(encoding="utf-8")
+
+        self.assertIn("REMOVIDO", html)
+
 
 class UserDashboardHtmlTest(unittest.TestCase):
     def test_dashboard_uses_effective_access_status(self):

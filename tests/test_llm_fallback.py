@@ -298,7 +298,7 @@ class SharedResidualPromotionTest(unittest.TestCase):
                 self.assertIn(member, valid_users,
                     f"{name}: '{member}' nao e um usuario valido (pode ser rotina/ID)")
 
-    def test_does_not_promote_single_routine(self):
+    def test_does_not_promote_single_routine_with_insufficient_users(self):
         reports = [
             {
                 "user": "AGALATTI",
@@ -313,7 +313,7 @@ class SharedResidualPromotionTest(unittest.TestCase):
                 "user_depto": "FINANCEIRO",
                 "routines_summary": [
                     {"routine": "MATA010", "features": {"Visualizar": {"access": "PERMITIDO"}}},
-                    {"routine": "FINR355", "features": {"Visualizar": {"access": "PERMITIDO"}}},
+                    {"routine": "FINR120", "features": {"Visualizar": {"access": "PERMITIDO"}}},
                 ],
             },
         ]
@@ -327,7 +327,59 @@ class SharedResidualPromotionTest(unittest.TestCase):
         generator._promote_shared_residual_clusters(min_users=2, min_routines=2, user_overlap_threshold=0.70)
 
         self.assertEqual(len(generator.tier3_routines), 0)
+
+    def test_promotes_single_routine_shared_by_many_users(self):
+        reports = [
+            {
+                "user": "AGALATTI",
+                "user_depto": "FINANCEIRO",
+                "routines_summary": [
+                    {"routine": "MATA010", "features": {"Visualizar": {"access": "PERMITIDO"}}},
+                    {"routine": "LERDA", "features": {"Visualizar": {"access": "PERMITIDO"}}},
+                ],
+            },
+            {
+                "user": "JDASILVA",
+                "user_depto": "FINANCEIRO",
+                "routines_summary": [
+                    {"routine": "MATA010", "features": {"Visualizar": {"access": "PERMITIDO"}}},
+                    {"routine": "LERDA", "features": {"Visualizar": {"access": "PERMITIDO"}}},
+                ],
+            },
+            {
+                "user": "PTALASSO",
+                "user_depto": "VENDAS",
+                "routines_summary": [
+                    {"routine": "MATA010", "features": {"Visualizar": {"access": "PERMITIDO"}}},
+                    {"routine": "LERDA", "features": {"Visualizar": {"access": "PERMITIDO"}}},
+                ],
+            },
+        ]
+
+        generator = FakeOrganizationalPrivilegeGenerator(reports, SCHEMA, "TESTE", conn=None)
+        generator.tier1_routines = {"MATA010"}
+        generator.tier2_routines = {}
+        generator.tier3_routines = {}
+        generator._compute_tier4()
+
         self.assertIn("AGALATTI", generator.tier4_routines)
+        self.assertIn("LERDA", generator.tier4_routines["AGALATTI"])
+
+        generator._promote_shared_residual_clusters(min_users=2, min_routines=2, user_overlap_threshold=0.70)
+
+        self.assertGreater(len(generator.tier3_routines), 0, "Should promote LERDA to tier3")
+        self.assertTrue(any("LERDA" in name for name in generator.tier3_routines),
+            f"Expected a tier3 set with LERDA in name, got: {list(generator.tier3_routines.keys())}")
+
+        for name, info in generator.tier3_routines.items():
+            if "LERDA" in name:
+                self.assertIn("AGALATTI", info["members"])
+                self.assertIn("JDASILVA", info["members"])
+                self.assertIn("PTALASSO", info["members"])
+                self.assertEqual(len(info["members"]), 3)
+
+        self.assertNotIn("LERDA", generator.tier4_routines.get("AGALATTI", set()),
+            "LERDA should no longer be in tier4 after promotion")
 
     def test_promotion_reduces_tier4(self):
         generator = FakeOrganizationalPrivilegeGenerator(self.reports, SCHEMA, "TESTE", conn=None)
