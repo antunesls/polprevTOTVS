@@ -432,5 +432,71 @@ class ScopedAdminFlowTest(unittest.TestCase):
             mock_batch_org.assert_not_called()
 
 
+class IgnoredGroupFilterTest(unittest.TestCase):
+    def _make_report(self, user, groups):
+        return {"user": user, "groups": groups, "routines_summary": [{"routine": "MATA010"}]}
+
+    def test_removes_user_with_ignored_group_id(self):
+        with patch("run.cfg.IGNORED_USER_GROUP_IDS", ["000000"]):
+            reports = [
+                self._make_report("admin", [{"group_id": "000000", "group_name": "Administradores"}]),
+                self._make_report("joao", [{"group_id": "000123", "group_name": "Financeiro"}]),
+            ]
+            result = run._filter_ignored_group_users(reports)
+            self.assertEqual(len(result), 1)
+            self.assertEqual(result[0]["user"], "joao")
+
+    def test_removes_user_when_any_group_matches_ignored_list(self):
+        with patch("run.cfg.IGNORED_USER_GROUP_IDS", ["000000", "000999"]):
+            reports = [
+                self._make_report("maria", [
+                    {"group_id": "000123", "group_name": "Financeiro"},
+                    {"group_id": "000999", "group_name": "Externo"},
+                ]),
+                self._make_report("joao", [{"group_id": "000123", "group_name": "Financeiro"}]),
+            ]
+            result = run._filter_ignored_group_users(reports)
+            self.assertEqual(len(result), 1)
+            self.assertEqual(result[0]["user"], "joao")
+
+    def test_filter_is_case_and_whitespace_insensitive(self):
+        with patch("run.cfg.IGNORED_USER_GROUP_IDS", ["  000000  "]):
+            reports = [
+                self._make_report("admin", [{"group_id": " 000000 ", "group_name": "Admin"}]),
+                self._make_report("joao", [{"group_id": "000123", "group_name": "Financeiro"}]),
+            ]
+            result = run._filter_ignored_group_users(reports)
+            self.assertEqual(len(result), 1)
+            self.assertEqual(result[0]["user"], "joao")
+
+    def test_does_not_filter_by_group_name(self):
+        with patch("run.cfg.IGNORED_USER_GROUP_IDS", ["000000"]):
+            reports = [
+                self._make_report("admin", [{"group_id": "000123", "group_name": "000000"}]),
+                self._make_report("joao", [{"group_id": "000123", "group_name": "Financeiro"}]),
+            ]
+            result = run._filter_ignored_group_users(reports)
+            self.assertEqual(len(result), 2)
+
+    def test_empty_ignored_list_keeps_all_users(self):
+        with patch("run.cfg.IGNORED_USER_GROUP_IDS", []):
+            reports = [
+                self._make_report("admin", [{"group_id": "000000", "group_name": "Administradores"}]),
+                self._make_report("joao", [{"group_id": "000123", "group_name": "Financeiro"}]),
+            ]
+            result = run._filter_ignored_group_users(reports)
+            self.assertEqual(len(result), 2)
+
+    def test_user_with_no_groups_is_kept(self):
+        with patch("run.cfg.IGNORED_USER_GROUP_IDS", ["000000"]):
+            reports = [
+                self._make_report("admin", [{"group_id": "000000", "group_name": "Administradores"}]),
+                self._make_report("semgrupo", []),
+            ]
+            result = run._filter_ignored_group_users(reports)
+            self.assertEqual(len(result), 1)
+            self.assertEqual(result[0]["user"], "semgrupo")
+
+
 if __name__ == "__main__":
     unittest.main()

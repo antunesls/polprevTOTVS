@@ -668,9 +668,31 @@ def wizard_org_analysis():
         run_organizational_analysis()
 
 
+def _filter_ignored_group_users(reports):
+    ignored_ids = {str(g).strip() for g in cfg.IGNORED_USER_GROUP_IDS if str(g).strip()}
+    if not ignored_ids:
+        return reports
+
+    filtered = []
+    removed = []
+    for rep in reports:
+        groups = rep.get("groups", []) or []
+        if any(str(g.get("group_id", "")).strip() in ignored_ids for g in groups):
+            removed.append(rep.get("user", "?"))
+        else:
+            filtered.append(rep)
+
+    if removed:
+        print(f"  {C['yellow']}[FILTRO]{C['reset']} {len(removed)} usuarios ignorados por grupo ({', '.join(sorted(ignored_ids))}): {', '.join(removed)}")
+
+    return filtered
+
+
 def _run_org_analysis_with_reports(all_reports):
     global _saved_llm_clusters
     G = C["green"]; CY = C["cyan"]; D = C["dim"]; B = C["bold"]; Y = C["yellow"]; R = C["reset"]
+
+    all_reports = _filter_ignored_group_users(all_reports)
 
     zero_routine_users = []
     filtered_reports = []
@@ -1614,6 +1636,7 @@ def menu_parametrizacao():
         min_dept_disp = "2 usuarios" if cfg.IGNORE_SINGLE_USER_DEPARTMENTS else "1 usuario"
         threshold_disp = str(cfg.CLUSTER_SIMILARITY_THRESHOLD)
         min_cluster_disp = str(cfg.MIN_CLUSTER_SIZE)
+        ignored_groups_disp = ", ".join(str(g).strip() for g in cfg.IGNORED_USER_GROUP_IDS if str(g).strip()) or "(nenhum)"
 
         from src.config import API_CONFIG
         api_enabled_disp = "SIM" if API_CONFIG.get("enabled") else "NAO"
@@ -1647,6 +1670,7 @@ def menu_parametrizacao():
             print(row(f"{L}║{R}  {B}5{{D}}{R} │ {W}Min. depto .......{R} [{D}{min_dept_disp}{R}]"))
             print(row(f"{L}║{R}  {B}5{{E}}{R} │ {W}Threshold Jaccard {R} [{D}{threshold_disp}{R}]"))
             print(row(f"{L}║{R}  {B}5{{F}}{R} │ {W}Tam. conjunto ....{R} [{D}{min_cluster_disp}{R}]"))
+            print(row(f"{L}║{R}  {B}5{{G}}{R} │ {W}Ignorar grupos ...{R} [{D}{ignored_groups_disp}{R}]"))
         print(row(f"{L}║{R}  {D}{'─' * (BOX - 3)}{R}"))
         print(row(f"{L}║{R}  {B}6{R} │ {W}Modo de privilegio{R} [{G}{mode_disp}{R}]"))
         print(row(f"{L}║{R}  {D}{'─' * (BOX - 3)}{R}"))
@@ -1772,6 +1796,17 @@ def menu_parametrizacao():
                         error("Valor deve ser maior ou igual a 1.")
                 except ValueError:
                     error("Valor invalido. Use numero inteiro, ex: 2.")
+
+        elif sub == "5G":
+            current = ", ".join(str(g).strip() for g in cfg.IGNORED_USER_GROUP_IDS if str(g).strip()) or "(nenhum)"
+            val = input(f"  IDs de grupos a ignorar [{current}]: ").strip()
+            if val == "-":
+                cfg.IGNORED_USER_GROUP_IDS = []
+                success("Lista de grupos ignorados limpa. Nenhum grupo sera filtrado.")
+            elif val:
+                new_ids = [g.strip() for g in val.split(",") if g.strip()]
+                cfg.IGNORED_USER_GROUP_IDS = new_ids
+                success(f"Grupos ignorados alterados para: {', '.join(new_ids)}")
 
         elif sub == "6":
             if cfg.PRIVILEGE_MODE == "per_user":
@@ -2643,6 +2678,8 @@ def run_organizational_analysis():
     if not all_reports:
         warn("Nenhum relatorio gerado. Abortando.")
         return
+
+    all_reports = _filter_ignored_group_users(all_reports)
 
     zero_routine_users = []
     filtered_reports = []

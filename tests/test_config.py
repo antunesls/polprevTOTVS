@@ -117,6 +117,7 @@ class ConfigTest(unittest.TestCase):
             "Min. depto",
             "Threshold Jaccard",
             "Tam. conjunto",
+            "Ignorar grupos",
             "API ativa",
             "Bearer Token",
             "ERP Database",
@@ -129,6 +130,42 @@ class ConfigTest(unittest.TestCase):
             self.assertIn(expected, text)
 
         config.PRIVILEGE_MODE = original_mode
+
+    def test_save_and_load_ignored_user_group_ids(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config_user.json"
+            original_ids = list(config.IGNORED_USER_GROUP_IDS)
+
+            with patch("src.config.CONFIG_USER_PATH", str(config_path)):
+                config.IGNORED_USER_GROUP_IDS = ["000000", "000123"]
+                config.save_user_config()
+
+                saved = json.loads(config_path.read_text(encoding="utf-8"))
+                self.assertEqual(saved["ignored_user_group_ids"], ["000000", "000123"])
+
+                config.IGNORED_USER_GROUP_IDS = ["000000"]
+                config.load_user_config()
+
+                self.assertEqual(config.IGNORED_USER_GROUP_IDS, ["000000", "000123"])
+
+            config.IGNORED_USER_GROUP_IDS = original_ids
+
+    def test_ignored_user_group_ids_default_is_admin(self):
+        self.assertEqual(config.IGNORED_USER_GROUP_IDS, ["000000"])
+
+    def test_save_ignored_user_group_ids_strips_and_filters_empty(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config_user.json"
+            original_ids = list(config.IGNORED_USER_GROUP_IDS)
+
+            with patch("src.config.CONFIG_USER_PATH", str(config_path)):
+                config.IGNORED_USER_GROUP_IDS = [" 000000 ", "", "000999", " "]
+                config.save_user_config()
+
+                saved = json.loads(config_path.read_text(encoding="utf-8"))
+                self.assertEqual(saved["ignored_user_group_ids"], ["000000", "000999"])
+
+            config.IGNORED_USER_GROUP_IDS = original_ids
 
 
 if __name__ == "__main__":
