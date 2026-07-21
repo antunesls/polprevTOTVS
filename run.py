@@ -20,7 +20,7 @@ from src.privilege_generator import PrivilegeGenerator, save_report_json
 from src.dashboard import generate_html
 from src.department_validation_report import generate_department_validation_reports
 from src.file_logger import start_file_logging, stop_file_logging
-from src.tier3 import apply_department_canonicalization, build_department_analysis, build_equivalent_profile_groups, build_tier4_users, load_existing_rules, normalize_tier3_sets, routine_permissions, user_routine_items
+from src.tier3 import apply_department_canonicalization, build_department_analysis, build_equivalent_profile_groups, build_tier4_users, load_existing_rules, load_existing_rule_ids, normalize_tier3_sets, routine_permissions, user_routine_items
 
 
 C = {
@@ -443,15 +443,28 @@ def wizard_mapeamento(current_login="usr001"):
 
     if is_org_mode and gen_priv:
         if not batch:
-            warn("Modo organizacional ativo: o SQL sera gerado a partir de TODOS os usuarios.")
-            info(f"O login informado ({login}) sera usado apenas para o mapeamento individual solicitado.")
-            if gen_dash:
-                info("O dashboard individual sera gerado antes da analise organizacional.")
-            report, schema, login_result = run_mapping(login)
-            if report and gen_dash:
-                run_dashboard(login_result)
-            run_batch_organizational("2")
-            return login
+            org_scope = _ask_org_scope(login)
+            if org_scope is None:
+                info("Operacao cancelada.")
+                return login
+            if org_scope == "user":
+                report, schema, login_result = run_mapping(login)
+                if report:
+                    run_scoped_admin("user", login, schema=schema, conn=report.get("_conn"))
+                return login
+            elif org_scope == "department":
+                report, schema, login_result = run_mapping(login)
+                if report:
+                    dept = report.get("user_depto", "").strip()
+                    if not dept:
+                        warn("Usuario sem departamento definido. Gerando apenas para o usuario.")
+                        run_scoped_admin("user", login, schema=schema, conn=report.get("_conn"))
+                    else:
+                        run_scoped_admin("department", dept, schema=schema, conn=report.get("_conn"))
+                return login
+            else:
+                run_batch_organizational("2")
+                return login
 
         run_batch_organizational("2")
         return login
@@ -869,6 +882,13 @@ def _generate_org_dashboards(all_reports, tier1_routines, tier2_data, tier3_clus
         if login:
             tier4_map[login] = set(user_entry.get("exclusive_routines", []) or [])
 
+    rule_name_to_id = {}
+    if conn is not None:
+        try:
+            rule_name_to_id = load_existing_rule_ids(conn)
+        except Exception:
+            pass
+
     from src.consolidated_inventory import build_consolidated_inventory
     consolidated = build_consolidated_inventory(
         all_reports,
@@ -878,6 +898,7 @@ def _generate_org_dashboards(all_reports, tier1_routines, tier2_data, tier3_clus
         {item["depto"]: set(r["code"] for r in item.get("routines", [])) for item in (tier2_data or [])},
         {c.get("name", f"CLUSTER_{i}"): {"routines": c.get("routines", []), "members": c.get("users", []), "reuses_existing_rule": c.get("reuses_existing_rule")} for i, c in enumerate(tier3_clusters or [])},
         tier4_map,
+        rule_name_to_id,
     )
 
     from src.html_admin import generate_admin_html
@@ -889,6 +910,215 @@ def _generate_org_dashboards(all_reports, tier1_routines, tier2_data, tier3_clus
     print(f"  {G}Admin Panel gerado:{R} {admin_path}")
     print(f"  {CY}O navegador foi aberto com o Admin Panel.{R}")
     print()
+
+
+def _ask_org_scope(login):
+    B = C["bold"]; D = C["dim"]; R = C["reset"]; CY = C["cyan"]; G = C["green"]
+    while True:
+        cls()
+        print(BANNER)
+        print(f"  {CY}  {B}Escopo da Geracao{R}")
+        print(f"  {CY}  {D}Para quem gerar as regras?{R}")
+        print()
+        print(f"  {B}[U]{R} Apenas o usuario {G}{login}{R}")
+        print(f"  {D}Gera regra P_{login.upper()[:20]} e Admin Panel individual.{R}")
+        print()
+        print(f"  {B}[D]{R} Departamento do usuario {G}{login}{R}")
+        print(f"  {D}Gera regra departamental comum + excecoes individuais.{R}")
+        print()
+        print(f"  {B}[T]{R} Todos os usuarios (organizacional completo)")
+        print(f"  {D}Analise por camadas com todos os tiers (1-4).{R}")
+        print()
+        val = input(f"  {B}Opcao{R} [{G}U{R} | {G}D{R} | {G}T{R} | X = cancelar]: ").strip().upper()
+        if val == "X":
+            return None
+        if val in ("U", "D", "T"):
+            return {"U": "user", "D": "department", "T": "all"}[val]
+
+
+def run_scoped_admin(scope_type, scope_value, mapper=None, schema=None, conn=None):
+    B = C["bold"]; D = C["dim"]; R = C["reset"]; G = C["green"]; Y = C["yellow"]; RD = C["red"]; CY = C["cyan"]
+
+    if not cfg.EMPRESA_NAME:
+        warn("Nome da empresa nao definido. Configure em Parametrizacao -> Nome da empresa.")
+        return None
+
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+    own_conn = False
+    if conn is None:
+        section("CONEXAO")
+        spin("Conectando ao banco MSSQL...", 0.6)
+        conn_ctx = get_connection()
+        conn = conn_ctx.__enter__()
+        own_conn = True
+
+    try:
+        if schema is None:
+            section("DISCOVERY")
+            spin("Descobrindo estrutura das tabelas...", 1.0)
+            schema = discover_columns_for_tables(SCHEMA_TABLES, conn)
+            ok()
+            print_schema_summary(schema)
+
+        if mapper is None:
+            mapper = UserMapper(schema, conn)
+
+        if scope_type == "user":
+            section(f"USUARIO: {scope_value}")
+            report = mapper.build_full_report(scope_value)
+            if report is None:
+                error(f"Usuario '{scope_value}' nao encontrado ou sem dados.")
+                return None
+            report["_conn"] = conn
+            json_path = save_report_json(report, scope_value)
+            all_reports = apply_department_canonicalization([report])
+
+            login = scope_value
+            user_routines = set(r["routine"] for r in report.get("routines_summary", []) if r.get("routine"))
+            tier1_routines = set()
+            tier2_routines = {}
+            tier4_routines = {login: user_routines}
+
+        elif scope_type == "department":
+            section(f"DEPARTAMENTO: {scope_value}")
+
+            users = mapper.list_non_blocked_users()
+            if not users:
+                warn("Nenhum usuario nao bloqueado encontrado.")
+                return None
+
+            dept_users = [
+                u for u in users
+                if str(u.get("depto", "")).strip().upper() == scope_value.upper()
+            ]
+            if not dept_users:
+                dept_users = [
+                    u for u in users
+                    if scope_value.upper() in str(u.get("depto", "")).strip().upper()
+                ]
+            if not dept_users:
+                error(f"Nenhum usuario encontrado no departamento '{scope_value}'.")
+                return None
+
+            print(f"\n  {G}{len(dept_users)}{R} usuarios encontrados no departamento '{scope_value}'.")
+
+            all_reports = []
+            failed = 0
+            for i, user_info in enumerate(dept_users, 1):
+                ulogin = user_info["login"]
+                spin(f"[{i}/{len(dept_users)}] Mapeando {ulogin}...", 0.3)
+                try:
+                    ureport = mapper.build_full_report(ulogin)
+                    if ureport is None:
+                        failed += 1
+                        continue
+                    ureport["_conn"] = conn
+                    json_path = save_report_json(ureport, ulogin)
+                    all_reports.append(ureport)
+                except Exception as e:
+                    warn(f"Falha ao mapear {ulogin}: {e}")
+                    failed += 1
+
+            ok(f"Mapeados: {G}{len(all_reports)}{R} | Falhas: {RD}{failed}{R}")
+
+            if not all_reports:
+                error("Nenhum relatorio gerado. Abortando.")
+                return None
+
+            all_reports = apply_department_canonicalization(all_reports)
+
+            user_routine_sets = {}
+            for rep in all_reports:
+                ulogin = rep["user"]
+                routines = set(r["routine"] for r in rep.get("routines_summary", []) if r.get("routine"))
+                user_routine_sets[ulogin] = routines
+
+            all_sets = list(user_routine_sets.values())
+            common_routines = all_sets[0].copy() if all_sets else set()
+            for s in all_sets[1:]:
+                common_routines &= s
+
+            print(f"\n  Rotinas comuns ao departamento: {G}{len(common_routines)}{R}")
+
+            tier1_routines = set()
+            tier2_routines = {scope_value: common_routines}
+
+            tier4_routines = {}
+            for ulogin, routines in user_routine_sets.items():
+                exclusive = routines - common_routines
+                if exclusive:
+                    tier4_routines[ulogin] = exclusive
+                    print(f"  {Y}{ulogin}{R}: {len(exclusive)} rotinas exclusivas")
+
+        else:
+            error(f"Escopo desconhecido: {scope_type}")
+            return None
+
+        section("REGRAS EXISTENTES")
+        spin("Inventariando regras do banco...", 0.8)
+        try:
+            existing_rules = load_existing_rules(conn)
+            existing_links = _load_existing_links(conn)
+            ok(f"{len(existing_rules)} regras, {len(existing_links)} vinculos encontrados")
+        except Exception:
+            existing_rules = {}
+            existing_links = {}
+            warn("Nao foi possivel carregar regras existentes.")
+
+        try:
+            rule_name_to_id = load_existing_rule_ids(conn)
+        except Exception:
+            rule_name_to_id = {}
+
+        section("INVENTARIO")
+        from src.consolidated_inventory import build_consolidated_inventory
+
+        tier4_map = {login: routines for login, routines in tier4_routines.items()}
+
+        consolidated = build_consolidated_inventory(
+            all_reports,
+            existing_rules,
+            existing_links,
+            tier1_routines,
+            tier2_routines,
+            {},
+            tier4_map,
+            rule_name_to_id,
+        )
+
+        total_rules = len(consolidated.get("rules", []))
+        new_rules = sum(1 for r in consolidated.get("rules", []) if r.get("action") == "CRIAR")
+        complement = sum(1 for r in consolidated.get("rules", []) if r.get("action") == "COMPLEMENTAR")
+        maintain = sum(1 for r in consolidated.get("rules", []) if r.get("action") == "MANTER")
+
+        print(f"  Regras no inventario: {G}{total_rules}{R}")
+        print(f"    {G}Novas:{R} {new_rules}  {Y}Complementar:{R} {complement}  {D}Manter:{R} {maintain}")
+
+        section("ADMIN PANEL")
+        from src.html_admin import generate_admin_html
+
+        safe_name = scope_value.upper().replace(" ", "_")
+        admin_path = os.path.join(OUTPUT_DIR, f"{safe_name}_admin.html")
+        generate_admin_html(consolidated, admin_path, cfg.EMPRESA_NAME)
+
+        import webbrowser
+        webbrowser.open(f"file://{os.path.abspath(admin_path)}")
+        print(f"  {G}Admin Panel gerado:{R} {admin_path}")
+        print(f"  {CY}O navegador foi aberto com o Admin Panel.{R}")
+
+        return admin_path
+
+    except Exception as e:
+        fail(str(e))
+        warn("Verifique:")
+        info("  - SQL Server esta rodando?")
+        info("  - ODBC Driver 17 instalado?")
+        info("  - Credenciais corretas?")
+        return None
+    finally:
+        if own_conn:
+            conn_ctx.__exit__(None, None, None)
 
 
 def run_department_validation_only():

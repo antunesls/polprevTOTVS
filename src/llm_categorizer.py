@@ -15,7 +15,7 @@ C = {
     "red": "\033[91m",   "dim": "\033[2m",
 }
 
-MAX_PROMPT_ROUTINES = 500
+MAX_PROMPT_ROUTINES = None
 RETRY_PROMPT_ROUTINES = 150
 MAX_ROUTINE_DESC_LEN = 60
 
@@ -23,7 +23,7 @@ if os.name == "nt":
     os.system("")
 
 
-def build_prompt(users_data, max_routines=MAX_PROMPT_ROUTINES):
+def build_prompt(users_data, max_routines=MAX_PROMPT_ROUTINES, min_users=None):
     routines_map = {}
     for u in users_data:
         for routine in u.get("routines", []):
@@ -45,12 +45,17 @@ def build_prompt(users_data, max_routines=MAX_PROMPT_ROUTINES):
             profile_key = tuple(permissions)
             routines_map[code]["profiles"][profile_key] = routines_map[code]["profiles"].get(profile_key, 0) + 1
 
+    total_all_routines = len(routines_map)
+
+    if min_users is not None and min_users > 1:
+        routines_map = {code: info for code, info in routines_map.items() if info["users"] >= min_users}
+
     sorted_routines = sorted(
         routines_map.items(),
         key=lambda item: (-item[1]["users"], item[0]),
     )
     total_routines = len(sorted_routines)
-    limited_routines = sorted_routines[:max_routines]
+    limited_routines = sorted_routines if max_routines is None else sorted_routines[:max_routines]
 
     entries = []
     for code, info in limited_routines:
@@ -66,8 +71,13 @@ def build_prompt(users_data, max_routines=MAX_PROMPT_ROUTINES):
 
     routines_block = "\n".join(entries)
     limit_notice = ""
-    if total_routines > max_routines:
+    if min_users is not None and min_users > 1:
         limit_notice = (
+            f"\nCatalogo filtrado: apenas rotinas com >= {min_users} usuarios "
+            f"({total_routines} de {total_all_routines} rotinas)."
+        )
+    if max_routines is not None and total_routines > max_routines:
+        limit_notice += (
             f"\nCatalogo limitado as {max_routines} rotinas mais recorrentes "
             f"de um total de {total_routines}, para respeitar o limite de contexto da LLM."
         )
@@ -179,7 +189,7 @@ def call_openrouter(prompt):
         print(f"  {C['red']}Erro HTTP {e.code}: {err_body[:300]}{C['reset']}")
         if e.code == 400 and "maximum context length" in err_body.lower():
             print(f"  {C['yellow']}A lista enviada para a LLM excedeu o contexto do modelo.{C['reset']}")
-            print(f"  {C['yellow']}O catalogo ja e limitado a {MAX_PROMPT_ROUTINES} rotinas; use um modelo com contexto maior ou reduza a base mapeada.{C['reset']}")
+            print(f"  {C['yellow']}Reduza a quantidade de usuarios mapeados ou aumente LLM_MIN_ROUTINE_USERS para filtrar mais rotinas.{C['reset']}")
         return None
     except Exception as e:
         print(f"  {C['red']}Erro ao consultar LLM: {e}{C['reset']}")
@@ -334,13 +344,24 @@ def suggest_clusters(users_data):
         for r in user.get("routines", [])
         if routine_code(r)
     }
+
+    routines_user_count = {}
+    for user in users_data:
+        for r in user.get("routines", []):
+            code = routine_code(r)
+            if code:
+                routines_user_count[code] = routines_user_count.get(code, 0) + 1
+    min_users = llm_cfg.LLM_MIN_ROUTINE_USERS
+    filtered_routine_count = sum(1 for c in routines_user_count.values() if c >= min_users)
+
     response_text = None
     result = None
     attempt_limits = (MAX_PROMPT_ROUTINES, RETRY_PROMPT_ROUTINES)
     for attempt_idx, prompt_limit in enumerate(attempt_limits, 1):
-        print(f"  {D}Entrada: {len(users_data)} usuarios | {len(unique_routines)} rotinas unicas | catalogo enviado: {prompt_limit}{R}")
+        sent = filtered_routine_count if prompt_limit is None else min(prompt_limit, filtered_routine_count)
+        print(f"  {D}Entrada: {len(users_data)} usuarios | {len(unique_routines)} rotinas unicas | >= {min_users} usuarios: {filtered_routine_count} | catalogo enviado: {sent}{R}")
         print(f"  {D}Tentativa {attempt_idx}/{len(attempt_limits)}{R}")
-        prompt = build_prompt(users_data, max_routines=prompt_limit)
+        prompt = build_prompt(users_data, max_routines=prompt_limit, min_users=min_users)
         response_text = call_openrouter(prompt)
 
         if not response_text:

@@ -225,6 +225,58 @@ class AdminDashboardHtmlTest(unittest.TestCase):
         self.assertIn("MATA010", html)
         self.assertIn("FINA050", html)
 
+    def test_admin_dashboard_has_user_selector_and_gensqlforuser(self):
+        inventory = {
+            "rules": [
+                {
+                    "rule_id": "A1",
+                    "rule_name": "P_EXISTENTE",
+                    "source": "EXISTENTE",
+                    "tier": "EXISTENTE",
+                    "action": "MANTER",
+                    "users": [{"user_id": "000001", "login": "joao"}, {"user_id": "000002", "login": "maria"}],
+                    "groups": [],
+                    "routines": [],
+                },
+            ]
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_path = Path(tmpdir) / "admin.html"
+            generate_admin_html(inventory, str(output_path), "TESTE")
+            html = output_path.read_text(encoding="utf-8")
+
+        self.assertIn("fUser", html)
+        self.assertIn("SQL por Usuário", html)
+        self.assertIn("genSQLForUser", html)
+        self.assertIn("Todos usuarios", html)
+        self.assertIn("joao", html)
+        self.assertIn("maria", html)
+
+    def test_admin_user_filter_uses_login_and_user_id_interchangeably(self):
+        inventory = {
+            "rules": [
+                {
+                    "rule_id": None,
+                    "rule_name": "P_NOVA",
+                    "source": "NOVO",
+                    "tier": "TIER3",
+                    "action": "CRIAR",
+                    "users": [{"login": "joao"}, {"user_id": "000002"}],
+                    "groups": [],
+                    "routines": [],
+                },
+            ]
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_path = Path(tmpdir) / "admin.html"
+            generate_admin_html(inventory, str(output_path), "TESTE")
+            html = output_path.read_text(encoding="utf-8")
+
+        self.assertIn("joao", html)
+        self.assertIn("000002", html)
+
 
 class UserDashboardHtmlTest(unittest.TestCase):
     def test_dashboard_uses_effective_access_status(self):

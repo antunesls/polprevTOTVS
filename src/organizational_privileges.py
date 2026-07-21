@@ -76,7 +76,7 @@ class OrganizationalPrivilegeGenerator:
                 try:
                     return int(rows[0][0])
                 except (TypeError, ValueError):
-                    return rows[0][0]
+                    return None
         except Exception:
             pass
         return None

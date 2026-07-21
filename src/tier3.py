@@ -374,21 +374,32 @@ def normalize_tier3_sets(raw_sets, reports):
     for item in raw_sets or []:
         name = _normalize_name(item.get("name"))
         if _is_department_based(item, name, department_labels):
+            print(f"    [DESCARTADO] {name}: baseado em departamento")
             continue
 
         source_routines = item.get("routines", item.get("common_routines", []))
         routines = []
         routine_items = []
+        skipped_no_permission = []
         for raw in source_routines or []:
             code = routine_code(raw)
             if code and code in valid_routines and code not in routines:
                 routine_item = {"code": code, "permissions": _normalize_required_permissions(raw)}
                 if not _any_user_covers_item(user_permissions, routine_item):
+                    skipped_no_permission.append(code)
                     continue
                 routines.append(code)
                 routine_items.append(routine_item if routine_item["permissions"] else code)
 
         if len(routines) < 2:
+            reason_parts = []
+            if skipped_no_permission:
+                reason_parts.append(f"permissoes nao cobertas: {', '.join(skipped_no_permission)}")
+            if len(source_routines or []) < 2:
+                reason_parts.append("menos de 2 rotinas sugeridas pela LLM")
+            else:
+                reason_parts.append(f"apenas {len(routines)} rotina(s) valida(s) apos filtro de permissoes")
+            print(f"    [DESCARTADO] {name}: {'; '.join(reason_parts)}")
             continue
 
         users = []
@@ -547,6 +558,26 @@ def load_existing_rules(conn):
             rules.setdefault(rule_name, {}).setdefault(func, set()).add(feature)
 
     return rules
+
+
+def load_existing_rule_ids(conn):
+    rule_ids = {}
+    try:
+        from src.database import fetch_dicts
+        rows = fetch_dicts(conn, "SELECT RL__ID, RL__CODIGO FROM SYS_RULES")
+    except Exception:
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT RL__ID, RL__CODIGO FROM SYS_RULES")
+            rows = [dict(zip([col[0] for col in cur.description], row)) for row in cur.fetchall()]
+        except Exception:
+            return rule_ids
+    for row in rows:
+        rid = str(row.get("RL__ID", "")).strip()
+        name = str(row.get("RL__CODIGO", "")).strip()
+        if rid and name:
+            rule_ids[name] = rid
+    return rule_ids
 
 
 def match_profile_to_existing_rules(routines, existing_rules):

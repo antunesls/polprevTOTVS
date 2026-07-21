@@ -1,3 +1,4 @@
+import hashlib
 import os
 
 from src.config import OUTPUT_DIR
@@ -56,7 +57,24 @@ class CanonicalMenuGenerator:
             rows = cursor.fetchall()
         except Exception:
             return {}
-        return {str(row[1]).strip(): int(row[0]) for row in rows if row[1] is not None}
+        result = {}
+        for row in rows:
+            if row[1] is not None:
+                func_name = str(row[1]).strip()
+                raw_id = row[0]
+                try:
+                    result[func_name] = int(raw_id)
+                except (TypeError, ValueError):
+                    result[func_name] = str(raw_id)
+        return result
+
+    @staticmethod
+    def _id_is_numeric(value):
+        return isinstance(value, (int, float))
+
+    @staticmethod
+    def _generate_hex_id(seed):
+        return hashlib.md5(seed.encode()).hexdigest().upper()
 
     def build_module_catalog(self):
         modules = {}
@@ -123,15 +141,25 @@ class CanonicalMenuGenerator:
         u_access = self._resolve_col("SYS_USR_MODULE", ["USR_ACESSO", "ACESSO"])
         u_del = self._resolve_col("SYS_USR_MODULE", ["D_E_L_E_T_"])
 
-        next_menu_id = self._get_max_id("MPMENU_MENU", m_pk)
-        next_item_id = self._get_max_id("MPMENU_ITEM", i_pk)
-        next_func_id = self._get_max_id("MPMENU_FUNCTION", f_pk)
         existing_functions = self._load_existing_function_ids()
+        use_hex_ids = any(not self._id_is_numeric(v) for v in existing_functions.values()) if existing_functions else False
+
+        if use_hex_ids:
+            seq_menu = 0
+            seq_item = 0
+            seq_func = 0
+        else:
+            seq_menu = self._get_max_id("MPMENU_MENU", m_pk)
+            seq_item = self._get_max_id("MPMENU_ITEM", i_pk)
+            seq_func = self._get_max_id("MPMENU_FUNCTION", f_pk)
 
         for module_name in sorted(catalog.keys()):
             module_data = catalog[module_name]
-            next_menu_id += 1
-            menu_id = next_menu_id
+            seq_menu += 1
+            if use_hex_ids:
+                menu_id = self._generate_hex_id(f"CANON_MENU_{module_name}_{seq_menu}")
+            else:
+                menu_id = seq_menu
             menu_name = module_data["menu_name"]
 
             lines.append(f"-- Modulo {module_name}")
@@ -141,12 +169,19 @@ class CanonicalMenuGenerator:
                 routine_code = routine["routine"]
                 description = routine["description"]
                 if routine_code not in existing_functions:
-                    next_func_id += 1
-                    existing_functions[routine_code] = next_func_id
-                    lines.extend(self._build_insert_function_lines(existing_functions[routine_code], routine_code, f_pk, f_func))
+                    seq_func += 1
+                    if use_hex_ids:
+                        new_func_id = self._generate_hex_id(f"CANON_FUNC_{routine_code}")
+                    else:
+                        new_func_id = seq_func
+                    existing_functions[routine_code] = new_func_id
+                    lines.extend(self._build_insert_function_lines(new_func_id, routine_code, f_pk, f_func))
 
-                next_item_id += 1
-                item_id = next_item_id
+                seq_item += 1
+                if use_hex_ids:
+                    item_id = self._generate_hex_id(f"CANON_ITEM_{menu_id}_{routine_code}")
+                else:
+                    item_id = seq_item
                 lines.extend(
                     self._build_insert_item_lines(
                         item_id,
@@ -180,7 +215,7 @@ class CanonicalMenuGenerator:
             where.append(f"{m_module} = {self._sanitize(module_name)}")
         if m_pk:
             insert_cols.append(m_pk)
-            insert_vals.append(str(menu_id))
+            insert_vals.append(self._sanitize(menu_id))
         if m_name:
             insert_cols.append(m_name)
             insert_vals.append(self._sanitize(menu_name))
@@ -203,7 +238,7 @@ class CanonicalMenuGenerator:
         return [
             f"IF NOT EXISTS (SELECT 1 FROM MPMENU_FUNCTION WHERE {f_func} = {self._sanitize(routine_code)})",
             f"INSERT INTO MPMENU_FUNCTION ({f_pk}, {f_func})",
-            f"VALUES ({func_id}, {self._sanitize(routine_code)});",
+            f"VALUES ({self._sanitize(func_id)}, {self._sanitize(routine_code)});",
         ]
 
     def _build_insert_item_lines(self, item_id, menu_id, func_id, i_pk, i_menu, i_func, i_father, i_tp_menu, i_status, i_access, i_del):
@@ -211,18 +246,18 @@ class CanonicalMenuGenerator:
         insert_vals = []
         where = []
         if i_menu:
-            where.append(f"{i_menu} = {menu_id}")
+            where.append(f"{i_menu} = {self._sanitize(menu_id)}")
         if i_func:
-            where.append(f"{i_func} = {func_id}")
+            where.append(f"{i_func} = {self._sanitize(func_id)}")
         if i_pk:
             insert_cols.append(i_pk)
-            insert_vals.append(str(item_id))
+            insert_vals.append(self._sanitize(item_id))
         if i_menu:
             insert_cols.append(i_menu)
-            insert_vals.append(str(menu_id))
+            insert_vals.append(self._sanitize(menu_id))
         if i_func:
             insert_cols.append(i_func)
-            insert_vals.append(str(func_id))
+            insert_vals.append(self._sanitize(func_id))
         if i_father:
             insert_cols.append(i_father)
             insert_vals.append("NULL")
@@ -250,12 +285,12 @@ class CanonicalMenuGenerator:
         insert_vals = []
         where = []
         if n_parent:
-            where.append(f"{n_parent} = {item_id}")
+            where.append(f"{n_parent} = {self._sanitize(item_id)}")
         if n_lang:
             where.append(f"{n_lang} = '1'")
         if n_parent:
             insert_cols.append(n_parent)
-            insert_vals.append(str(item_id))
+            insert_vals.append(self._sanitize(item_id))
         if n_lang:
             insert_cols.append(n_lang)
             insert_vals.append(self._sanitize("1"))

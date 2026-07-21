@@ -164,5 +164,34 @@ class ConsolidatedInventoryTest(unittest.TestCase):
         self.assertIn(rule["action"], ("MANTER", "COMPLEMENTAR"))
 
 
+    def test_rule_name_to_id_preserves_real_id_in_existing_rules(self):
+        rule_name_to_id = {"P_TAF_RH": "A00042", "P_RH": "B00100", "P_COMPRAS": "C00999"}
+        result = build_consolidated_inventory(
+            self._reports(), self.existing_rules, self.existing_links,
+            self.tier1_routines, self.tier2_routines, self.tier3_routines, self.tier4_routines,
+            rule_name_to_id=rule_name_to_id,
+        )
+
+        p_taf = next(r for r in result["rules"] if r["rule_name"] == "P_TAF_RH")
+        self.assertEqual(p_taf["rule_id"], "A00042")
+
+        p_rh = next(r for r in result["rules"] if r["rule_name"] == "P_RH")
+        self.assertEqual(p_rh["rule_id"], "B00100")
+
+        p_compras = next(r for r in result["rules"] if r["rule_name"] == "P_COMPRAS")
+        self.assertEqual(p_compras["rule_id"], "C00999")
+
+    def test_new_rules_have_none_rule_id_even_with_other_ids_present(self):
+        rule_name_to_id = {"P_TAF_RH": "A00042"}
+        result = build_consolidated_inventory(
+            self._reports(), self.existing_rules, self.existing_links,
+            self.tier1_routines, self.tier2_routines, self.tier3_routines, self.tier4_routines,
+            rule_name_to_id=rule_name_to_id,
+        )
+
+        p_cj_novo = next(r for r in result["rules"] if r["rule_name"] == "P_CJ_NOVO")
+        self.assertIsNone(p_cj_novo["rule_id"])
+
+
 if __name__ == "__main__":
     unittest.main()

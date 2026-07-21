@@ -429,6 +429,35 @@ class Tier3FunctionalSetsTest(unittest.TestCase):
 
         self.assertEqual(result, {"COMERCIAL": {"MATA010"}, "CONTROLADORIA": {"FINA001"}})
 
+    def test_logs_descartados_with_reason(self):
+        from io import StringIO
+        from contextlib import redirect_stdout
+
+        raw_sets = [
+            {
+                "name": "P_CJ_EXPEDICAO",
+                "reason": "DEPARTAMENTO",
+                "routines": ["ETQ001", "WMS010"],
+            },
+            {
+                "name": "P_CJ_SEM_PERMISSAO",
+                "reason": "Conjunto invalido",
+                "routines": [
+                    {"code": "ETQ001", "permissions": ["Excluir"]},
+                    {"code": "WMS010", "permissions": ["Excluir"]},
+                ],
+            },
+        ]
+
+        output = StringIO()
+        with redirect_stdout(output):
+            normalize_tier3_sets(raw_sets, self.reports)
+
+        text = output.getvalue()
+        self.assertIn("[DESCARTADO] P_CJ_EXPEDICAO: baseado em departamento", text)
+        self.assertIn("[DESCARTADO] P_CJ_SEM_PERMISSAO", text)
+        self.assertIn("permissoes nao cobertas", text)
+
 
 class ExistingRulesTest(unittest.TestCase):
     def test_load_existing_rules_from_conn(self):
@@ -650,6 +679,37 @@ class Tier3PromptTest(unittest.TestCase):
 
         self.assertIn("No maximo 12 conjuntos", prompt)
         self.assertIn("No maximo 20 rotinas por conjunto", prompt)
+
+    def test_build_prompt_filters_routines_by_min_users(self):
+        from src.llm_categorizer import build_prompt
+
+        prompt = build_prompt([
+            {"user": "joao", "routines": [
+                {"code": "MATA010", "description": "Compartilhada por 2"},
+                {"code": "MATA020", "description": "Compartilhada por 2"},
+            ]},
+            {"user": "maria", "routines": [
+                {"code": "MATA010", "description": "Compartilhada por 2"},
+                {"code": "MATA020", "description": "Compartilhada por 2"},
+                {"code": "MATA040", "description": "So maria usa"},
+            ]},
+        ], min_users=2)
+
+        self.assertIn("Catalogo filtrado: apenas rotinas com >= 2 usuarios (2 de 3 rotinas)", prompt)
+        self.assertIn("MATA010", prompt)
+        self.assertIn("MATA020", prompt)
+        self.assertNotIn("MATA040", prompt)
+
+    def test_build_prompt_without_min_users_includes_all(self):
+        from src.llm_categorizer import build_prompt
+
+        prompt = build_prompt([
+            {"user": "joao", "routines": [{"code": "MATA010"}]},
+            {"user": "maria", "routines": [{"code": "MATA010"}, {"code": "MATA040"}]},
+        ])
+
+        self.assertNotIn("Catalogo filtrado", prompt)
+        self.assertIn("MATA040", prompt)
 
 
 class DepartmentCanonicalizationTest(unittest.TestCase):

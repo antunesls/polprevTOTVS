@@ -13,6 +13,7 @@ PRIVILEGE_MODE = "per_user"
 IGNORE_SINGLE_USER_DEPARTMENTS = True
 CLUSTER_SIMILARITY_THRESHOLD = 0.4
 MIN_CLUSTER_SIZE = 2
+LLM_MIN_ROUTINE_USERS = 2
 
 EMPRESA_NAME = ""
 
@@ -71,6 +72,7 @@ def load_user_config():
         globals()["IGNORE_SINGLE_USER_DEPARTMENTS"] = user_cfg.get("ignore_single_user_departments", True)
         globals()["CLUSTER_SIMILARITY_THRESHOLD"] = user_cfg.get("cluster_similarity_threshold", 0.4)
         globals()["MIN_CLUSTER_SIZE"] = user_cfg.get("min_cluster_size", 2)
+        globals()["LLM_MIN_ROUTINE_USERS"] = user_cfg.get("llm_min_routine_users", 2)
         globals()["EMPRESA_NAME"] = user_cfg.get("empresa_name", "")
         globals()["LLM_API_KEY"] = user_cfg.get("llm_api_key", "")
         globals()["LLM_BASE_URL"] = user_cfg.get("llm_base_url", "https://openrouter.ai/api/v1")
@@ -101,6 +103,7 @@ def save_user_config():
         "ignore_single_user_departments": IGNORE_SINGLE_USER_DEPARTMENTS,
         "cluster_similarity_threshold": CLUSTER_SIMILARITY_THRESHOLD,
         "min_cluster_size": MIN_CLUSTER_SIZE,
+        "llm_min_routine_users": LLM_MIN_ROUTINE_USERS,
         "empresa_name": EMPRESA_NAME,
         "llm_api_key": LLM_API_KEY,
         "llm_base_url": LLM_BASE_URL,

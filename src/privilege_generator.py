@@ -92,8 +92,7 @@ class PrivilegeGenerator:
         fet_menuoper = self._resolve_col("SYS_RULES_FEATURES", ["RL__MENUOPER", "MENUOPER"])
         fet_menudef = self._resolve_col("SYS_RULES_FEATURES", ["RL__MENUDEF", "MENUDEF"])
 
-        feat_max_id = self._get_max_id("SYS_RULES_FEATURES", fet_pk)
-        next_feat_id = (feat_max_id or 0) + 1
+        next_feat_id = 1
         generated_count = 0
 
         routines = self.report.get("routines_summary", [])
@@ -209,7 +208,7 @@ class PrivilegeGenerator:
                 try:
                     return int(rows[0][0])
                 except (TypeError, ValueError):
-                    return rows[0][0]
+                    return None
         except Exception:
             pass
         return None

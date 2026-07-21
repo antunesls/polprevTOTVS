@@ -114,6 +114,21 @@ class CanonicalMenuGeneratorTest(unittest.TestCase):
         self.assertIn("VALUES (1, 'MATA020');", sql)
         self.assertIn("VALUES (2, 'MATA030');", sql)
 
+    def test_generate_sql_handles_hex_function_ids(self):
+        class HexIdGenerator(CanonicalMenuGenerator):
+            def _get_max_id(self, table, pk_col):
+                return 0
+
+            def _load_existing_function_ids(self):
+                return {"MATA010": "2DEB775480FBED11812CB82A72DC1A84"}
+
+        generator = HexIdGenerator(build_reports(), SCHEMA)
+        sql = generator.generate_sql(link_mode="add")
+
+        self.assertIn("INSERT INTO MPMENU_FUNCTION (F_ID, F_FUNCTION)", sql)
+        self.assertIn("'2DEB775480FBED11812CB82A72DC1A84'", sql)
+        self.assertNotIn("INSERT INTO MPMENU_FUNCTION (F_ID, F_FUNCTION)\nVALUES (1, 'MATA020');", sql)
+
 
 if __name__ == "__main__":
     unittest.main()

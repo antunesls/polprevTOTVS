@@ -96,6 +96,19 @@ class PrivilegeSqlGenerationTest(unittest.TestCase):
         self.assertIn("'Movimentos Bancarios - Agrupado por Banc'", sql)
         self.assertNotIn("'Movimentos Bancarios - Agrupado por Bancos'", sql)
 
+    def test_generate_sql_handles_non_numeric_feature_max_id(self):
+        class FeaturesStringIdGenerator(PrivilegeGenerator):
+            def _get_max_id(self, table, pk_col):
+                if table == "SYS_RULES_FEATURES":
+                    return "A00999"
+                return 0
+
+        generator = FeaturesStringIdGenerator(build_report(), SCHEMA)
+        sql = generator.generate_sql("P_AUTO_TESTE")
+
+        self.assertIn("INSERT INTO SYS_RULES_FEATURES", sql)
+        self.assertIn("1", sql)
+
 
 class SchemaDiscoveryTest(unittest.TestCase):
     def test_schema_candidates_include_rules_transact(self):

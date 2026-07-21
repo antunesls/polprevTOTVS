@@ -131,7 +131,7 @@ class LlmProgressOutputTest(unittest.TestCase):
 
         text = output.getvalue()
         self.assertIn("Entrada:", text)
-        self.assertIn("usuarios | 2 rotinas unicas | catalogo enviado: 500", text)
+        self.assertIn("usuarios | 2 rotinas unicas | >= 2 usuarios: 0 | catalogo enviado: 0", text)
         self.assertIn("Tentativa 1/2", text)
         self.assertIn("Tentativa 2/2", text)
 

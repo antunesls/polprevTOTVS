@@ -58,6 +58,7 @@ def build_consolidated_inventory(
     tier2_routines,
     tier3_routines,
     tier4_routines,
+    rule_name_to_id=None,
 ):
     existing_rules = existing_rules or {}
     existing_links = existing_links or {}
@@ -65,6 +66,7 @@ def build_consolidated_inventory(
     tier2_routines = tier2_routines or {}
     tier3_routines = tier3_routines or {}
     tier4_routines = tier4_routines or {}
+    rule_name_to_id = rule_name_to_id or {}
 
     user_id_to_login = {}
     for rep in reports or []:
@@ -98,7 +100,7 @@ def build_consolidated_inventory(
             })
 
         rules.append({
-            "rule_id": None,
+            "rule_id": rule_name_to_id.get(rule_name),
             "rule_name": rule_name,
             "rule_description": "",
             "source": "EXISTENTE",

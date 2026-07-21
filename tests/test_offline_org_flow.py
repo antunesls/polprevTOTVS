@@ -199,5 +199,238 @@ class OrganizationalDashboardFlowTest(unittest.TestCase):
         report_helper.assert_called_once()
 
 
+class ScopedAdminFlowTest(unittest.TestCase):
+    def _build_reports(self):
+        return [
+            {
+                "user": "joao", "user_id": "001", "user_name": "Joao",
+                "user_depto": "COMERCIAL", "total_routines": 2,
+                "routines_summary": [
+                    {"routine": "MATA010", "description": "Produtos", "features": {"Visualizar": {"access_raw": "1", "menu_oper": 2, "menu_def": "A010VIS"}}},
+                    {"routine": "MATA020", "description": "Clientes", "features": {}},
+                ],
+            },
+            {
+                "user": "maria", "user_id": "002", "user_name": "Maria",
+                "user_depto": "COMERCIAL", "total_routines": 3,
+                "routines_summary": [
+                    {"routine": "MATA010", "description": "Produtos", "features": {"Visualizar": {"access_raw": "1", "menu_oper": 2, "menu_def": "A010VIS"}}},
+                    {"routine": "MATA030", "description": "Fornecedores", "features": {}},
+                    {"routine": "MATA040", "description": "Transportadoras", "features": {}},
+                ],
+            },
+        ]
+
+    def test_scoped_admin_user_generates_admin_html_for_single_user(self):
+        reports = self._build_reports()
+
+        class FakeMapper:
+            def build_full_report(self, login):
+                rep = next((r for r in reports if r["user"] == login), None)
+                rep_copy = dict(rep)
+                rep_copy["_conn"] = object()
+                return rep_copy
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch("run.OUTPUT_DIR", tmpdir), \
+                 patch("run.cfg.EMPRESA_NAME", "TESTE"), \
+                 patch("run.get_connection") as mock_conn, \
+                 patch("run.discover_columns_for_tables", return_value={}), \
+                 patch("run.print_schema_summary"), \
+                 patch("run.UserMapper", return_value=FakeMapper()), \
+                 patch("run.load_existing_rules", return_value={}), \
+                 patch("run._load_existing_links", return_value={}), \
+                 patch("src.html_admin.generate_admin_html") as admin_helper, \
+                 patch("webbrowser.open"):
+                mock_conn.return_value.__enter__.return_value = object()
+                mock_conn.return_value.__exit__.return_value = False
+
+                result = run.run_scoped_admin("user", "joao")
+
+            self.assertIsNotNone(result)
+            admin_helper.assert_called_once()
+            inventory = admin_helper.call_args[0][0]
+            rules = inventory.get("rules", [])
+            self.assertGreaterEqual(len(rules), 1)
+            rule_names = [r["rule_name"] for r in rules]
+            self.assertIn("P_JOAO", rule_names)
+
+    def test_scoped_admin_department_generates_tier2_and_tier4(self):
+        reports = self._build_reports()
+
+        class FakeMapper:
+            def list_non_blocked_users(self):
+                return [
+                    {"login": "joao", "id": "001", "depto": "COMERCIAL"},
+                    {"login": "maria", "id": "002", "depto": "COMERCIAL"},
+                ]
+
+            def build_full_report(self, login):
+                rep = next((r for r in reports if r["user"] == login), None)
+                rep_copy = dict(rep)
+                rep_copy["_conn"] = object()
+                return rep_copy
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch("run.OUTPUT_DIR", tmpdir), \
+                 patch("run.cfg.EMPRESA_NAME", "TESTE"), \
+                 patch("run.get_connection") as mock_conn, \
+                 patch("run.discover_columns_for_tables", return_value={}), \
+                 patch("run.print_schema_summary"), \
+                 patch("run.UserMapper", return_value=FakeMapper()), \
+                 patch("run.load_existing_rules", return_value={}), \
+                 patch("run._load_existing_links", return_value={}), \
+                 patch("src.html_admin.generate_admin_html") as admin_helper, \
+                 patch("webbrowser.open"):
+                mock_conn.return_value.__enter__.return_value = object()
+                mock_conn.return_value.__exit__.return_value = False
+
+                result = run.run_scoped_admin("department", "COMERCIAL")
+
+            self.assertIsNotNone(result)
+            admin_helper.assert_called_once()
+            inventory = admin_helper.call_args[0][0]
+            rules = inventory.get("rules", [])
+            self.assertGreaterEqual(len(rules), 1)
+
+            rule_names = [r["rule_name"] for r in rules]
+            tiers = {r["rule_name"]: r.get("tier") for r in rules}
+
+            self.assertIn("P_COMERCIAL", rule_names)
+            self.assertEqual(tiers.get("P_COMERCIAL"), "TIER2")
+
+            tier4_rules = [r for r in rules if r.get("tier") == "TIER4"]
+            for r in tier4_rules:
+                self.assertTrue(r["rule_name"].startswith("P_"))
+
+    def test_scoped_admin_department_common_routine_not_in_tier4(self):
+        reports = [
+            {
+                "user": "joao", "user_id": "001", "user_name": "Joao",
+                "user_depto": "FINANCEIRO", "total_routines": 1,
+                "routines_summary": [
+                    {"routine": "FINA010", "description": "Titulos", "features": {}},
+                ],
+            },
+            {
+                "user": "maria", "user_id": "002", "user_name": "Maria",
+                "user_depto": "FINANCEIRO", "total_routines": 1,
+                "routines_summary": [
+                    {"routine": "FINA010", "description": "Titulos", "features": {}},
+                ],
+            },
+        ]
+
+        class FakeMapper:
+            def list_non_blocked_users(self):
+                return [
+                    {"login": "joao", "id": "001", "depto": "FINANCEIRO"},
+                    {"login": "maria", "id": "002", "depto": "FINANCEIRO"},
+                ]
+
+            def build_full_report(self, login):
+                rep = next((r for r in reports if r["user"] == login), None)
+                rep_copy = dict(rep)
+                rep_copy["_conn"] = object()
+                return rep_copy
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch("run.OUTPUT_DIR", tmpdir), \
+                 patch("run.cfg.EMPRESA_NAME", "TESTE"), \
+                 patch("run.get_connection") as mock_conn, \
+                 patch("run.discover_columns_for_tables", return_value={}), \
+                 patch("run.print_schema_summary"), \
+                 patch("run.UserMapper", return_value=FakeMapper()), \
+                 patch("run.load_existing_rules", return_value={}), \
+                 patch("run._load_existing_links", return_value={}), \
+                 patch("src.html_admin.generate_admin_html") as admin_helper, \
+                 patch("webbrowser.open"):
+                mock_conn.return_value.__enter__.return_value = object()
+                mock_conn.return_value.__exit__.return_value = False
+
+                result = run.run_scoped_admin("department", "FINANCEIRO")
+
+            self.assertIsNotNone(result)
+            admin_helper.assert_called_once()
+            inventory = admin_helper.call_args[0][0]
+            rules = inventory.get("rules", [])
+            rule_names = [r["rule_name"] for r in rules]
+            tiers = {r["rule_name"]: r.get("tier") for r in rules}
+
+            self.assertIn("P_FINANCEIRO", rule_names)
+            self.assertEqual(tiers.get("P_FINANCEIRO"), "TIER2")
+            self.assertNotIn("TIER4", [r.get("tier") for r in rules])
+
+    def test_ask_org_scope_returns_user_for_u(self):
+        with patch("builtins.input", return_value="U"):
+            result = run._ask_org_scope("joao")
+        self.assertEqual(result, "user")
+
+    def test_ask_org_scope_returns_department_for_d(self):
+        with patch("builtins.input", return_value="D"):
+            result = run._ask_org_scope("joao")
+        self.assertEqual(result, "department")
+
+    def test_ask_org_scope_returns_all_for_t(self):
+        with patch("builtins.input", return_value="T"):
+            result = run._ask_org_scope("joao")
+        self.assertEqual(result, "all")
+
+    def test_ask_org_scope_returns_none_for_x(self):
+        with patch("builtins.input", return_value="X"):
+            result = run._ask_org_scope("joao")
+        self.assertIsNone(result)
+
+    def test_wizard_org_mode_user_scope_calls_scoped_admin(self):
+        with patch("run.cfg.PRIVILEGE_MODE", "organizational_layer"), \
+             patch("run.cfg.EMPRESA_NAME", "TESTE"), \
+             patch("run.cls"), \
+             patch("run.run_batch", return_value=None), \
+             patch("run.run_batch_organizational", return_value=None) as mock_batch_org, \
+             patch("run.run_scoped_admin", return_value="/tmp/joao_admin.html") as mock_scoped, \
+             patch("run.run_mapping", return_value=({"user": "joao", "_conn": object(), "user_depto": "COMERCIAL", "routines_summary": []}, {}, "joao")):
+            with patch("builtins.input", side_effect=[
+                "joao",    # ETAPA 1: usuario joao
+                "S",       # ETAPA 2: gerar SQL
+                "N",       # ETAPA 4: gerar menu
+                "N",       # ETAPA 6: gerar dashboard
+                "N",       # ETAPA 7: reusar
+                "S",       # ETAPA 8: confirmacao
+            ]), patch("run._ask_org_scope", return_value="user") as mock_scope:
+                run.wizard_mapeamento("usr001")
+
+            mock_scope.assert_called_once_with("joao")
+            mock_scoped.assert_called_once()
+            call_args = mock_scoped.call_args
+            self.assertEqual(call_args[0][0], "user")
+            self.assertEqual(call_args[0][1], "joao")
+            mock_batch_org.assert_not_called()
+
+    def test_wizard_org_mode_department_scope_maps_user_then_department(self):
+        with patch("run.cfg.PRIVILEGE_MODE", "organizational_layer"), \
+             patch("run.cfg.EMPRESA_NAME", "TESTE"), \
+             patch("run.cls"), \
+             patch("run.run_batch", return_value=None), \
+             patch("run.run_batch_organizational", return_value=None) as mock_batch_org, \
+             patch("run.run_scoped_admin", return_value="/tmp/COMERCIAL_admin.html") as mock_scoped, \
+             patch("run.run_mapping", return_value=({"user": "maria", "_conn": object(), "user_depto": "COMERCIAL", "routines_summary": [{"routine": "MATA010"}]}, {}, "maria")):
+            with patch("builtins.input", side_effect=[
+                "maria",   # ETAPA 1: usuario maria
+                "S",       # ETAPA 2: gerar SQL
+                "N",       # ETAPA 4: gerar menu
+                "N",       # ETAPA 6: gerar dashboard
+                "N",       # ETAPA 7: reusar
+                "S",       # ETAPA 8: confirmacao
+            ]), patch("run._ask_org_scope", return_value="department") as mock_scope:
+                run.wizard_mapeamento("usr001")
+
+            mock_scope.assert_called_once_with("maria")
+            mock_scoped.assert_called_once()
+            call_args = mock_scoped.call_args
+            self.assertEqual(call_args[0][0], "department")
+            self.assertEqual(call_args[0][1], "COMERCIAL")
+            mock_batch_org.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()
