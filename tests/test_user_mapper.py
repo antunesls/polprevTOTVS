@@ -76,6 +76,56 @@ class SchemaAwareUserMapper(UserMapper):
         return candidates[0]
 
 
+class UserMapperBlockedUsersTest(unittest.TestCase):
+    def test_list_non_blocked_users_excludes_msblql_blocked_and_deleted_users(self):
+        mapper = SchemaAwareUserMapper()
+
+        def fake_fetch_dicts(conn, query, params=()):
+            self.assertIn("USR_MSBLQL <> ?", query)
+            self.assertIn("D_E_L_E_T_ = ?", query)
+            self.assertEqual(list(params), ["1", " "])
+            return [
+                {"USR_ID": "000001", "USR_CODIGO": "joao", "USR_DEPTO": "TI", "USR_NOME": "Joao"},
+            ]
+
+        with patch("src.user_mapper.fetch_dicts", side_effect=fake_fetch_dicts):
+            users = mapper.list_non_blocked_users()
+
+        self.assertEqual(users, [{"id": "000001", "login": "joao", "depto": "TI", "name": "Joao"}])
+
+    def test_map_routine_users_excludes_blocked_users_before_building_reports(self):
+        reports_by_login = {
+            "joao": {"user": "joao", "routines_summary": [{"routine": "MATA010", "effective_access": "PERMITIDO"}]},
+        }
+        mapper = TrackingUserMapper(reports_by_login, {"MATA010": ["SIGACOM"]})
+        built_reports = []
+
+        def fake_build_full_report(login):
+            built_reports.append(login)
+            return reports_by_login[login]
+
+        def fake_fetch_dicts(conn, query, params=()):
+            if "FROM MPMENU_FUNCTION" in query:
+                return [{"F_ID": "10"}]
+            if "FROM MPMENU_ITEM" in query:
+                return [{"I_ID_MENU": "SIGACOM"}]
+            if "FROM SYS_USR_MODULE" in query:
+                return [{"USR_ID": "1"}, {"USR_ID": "2"}]
+            if "FROM SYS_USR" in query:
+                self.assertIn("USR_MSBLQL <> ?", query)
+                self.assertIn("D_E_L_E_T_ = ?", query)
+                self.assertEqual(list(params)[-2:], ["1", " "])
+                return [{"USR_ID": "1", "USR_CODIGO": "joao"}]
+            return []
+
+        with patch("src.user_mapper.fetch_dicts", side_effect=fake_fetch_dicts):
+            with patch.object(TrackingUserMapper, "build_full_report", side_effect=fake_build_full_report):
+                result = mapper.map_routine_users("MATA010")
+
+        self.assertEqual(result["user_ids"], ["1"])
+        self.assertEqual(built_reports, ["joao"])
+
+
 class UserMapperAccessMatrixTest(unittest.TestCase):
     def test_group_default_requires_explicit_permission(self):
         mapper = FakeUserMapper(

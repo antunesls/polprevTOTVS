@@ -11,6 +11,8 @@ DB_CONFIG = {
 
 PRIVILEGE_MODE = "per_user"
 IGNORE_SINGLE_USER_DEPARTMENTS = True
+CLUSTER_SIMILARITY_THRESHOLD = 0.4
+MIN_CLUSTER_SIZE = 2
 
 EMPRESA_NAME = ""
 
@@ -67,6 +69,8 @@ def load_user_config():
         DB_CONFIG.update(user_cfg.get("db", {}))
         globals()["PRIVILEGE_MODE"] = user_cfg.get("privilege_mode", "per_user")
         globals()["IGNORE_SINGLE_USER_DEPARTMENTS"] = user_cfg.get("ignore_single_user_departments", True)
+        globals()["CLUSTER_SIMILARITY_THRESHOLD"] = user_cfg.get("cluster_similarity_threshold", 0.4)
+        globals()["MIN_CLUSTER_SIZE"] = user_cfg.get("min_cluster_size", 2)
         globals()["EMPRESA_NAME"] = user_cfg.get("empresa_name", "")
         globals()["LLM_API_KEY"] = user_cfg.get("llm_api_key", "")
         globals()["LLM_BASE_URL"] = user_cfg.get("llm_base_url", "https://openrouter.ai/api/v1")
@@ -76,6 +80,16 @@ def load_user_config():
         api_cfg = user_cfg.get("api", {})
         if api_cfg:
             API_CONFIG.update(api_cfg)
+        _sync_organizational_privileges_config()
+    except Exception:
+        pass
+
+
+def _sync_organizational_privileges_config():
+    try:
+        import src.organizational_privileges as org_priv
+        org_priv.CLUSTER_SIMILARITY_THRESHOLD = CLUSTER_SIMILARITY_THRESHOLD
+        org_priv.MIN_CLUSTER_SIZE = MIN_CLUSTER_SIZE
     except Exception:
         pass
 
@@ -85,6 +99,8 @@ def save_user_config():
         "db": {k: DB_CONFIG[k] for k in ("server", "database", "username", "password", "driver")},
         "privilege_mode": PRIVILEGE_MODE,
         "ignore_single_user_departments": IGNORE_SINGLE_USER_DEPARTMENTS,
+        "cluster_similarity_threshold": CLUSTER_SIMILARITY_THRESHOLD,
+        "min_cluster_size": MIN_CLUSTER_SIZE,
         "empresa_name": EMPRESA_NAME,
         "llm_api_key": LLM_API_KEY,
         "llm_base_url": LLM_BASE_URL,

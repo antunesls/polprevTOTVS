@@ -70,6 +70,24 @@ class UserMapper:
             return default
         return row.get(column_name, default)
 
+    def _apply_non_blocked_user_filter(self, where, params):
+        block_col = self.resolve_col("SYS_USR", ["USR_MSBLQL", "USR_BLOQUEIO", "USR_BLOCKED", "USR_STATUS", "USR_ATIVO"])
+        del_col = self.resolve_col("SYS_USR", ["D_E_L_E_T_"])
+
+        if block_col:
+            if block_col.upper() == "USR_ATIVO":
+                where += f" AND {block_col} <> ?"
+                params.append("2")
+            else:
+                where += f" AND {block_col} <> ?"
+                params.append("1")
+
+        if del_col:
+            where += f" AND {del_col} = ?"
+            params.append(" ")
+
+        return where, params
+
     def _build_rule_map(self, rule_ids, include_deleted_filter=True):
         if not rule_ids:
             return {}
@@ -294,16 +312,22 @@ class UserMapper:
             user_map = {}
             if user_ids and usr_login:
                 placeholders = ",".join("?" for _ in user_ids)
+                where = f"{usr_pk} IN ({placeholders})"
+                params = list(user_ids)
+                where, params = self._apply_non_blocked_user_filter(where, params)
                 user_rows = fetch_dicts(self.conn,
-                    f"SELECT {usr_pk}, {usr_login} FROM SYS_USR WHERE {usr_pk} IN ({placeholders})",
-                    user_ids)
+                    f"SELECT {usr_pk}, {usr_login} FROM SYS_USR WHERE {where}",
+                    params)
                 user_map = {row[usr_pk]: str(row.get(usr_login, "") or "").strip() for row in user_rows}
             for row in rows:
                 c_rule_id = row.get(usr_rul_col)
+                c_user_id = row.get(usr_col)
+                if user_map and c_user_id not in user_map:
+                    continue
                 if c_rule_id in privilege_sets:
                     privilege_sets[c_rule_id]["linked_users"].append({
-                        "user_id": row.get(usr_col),
-                        "login": user_map.get(row.get(usr_col), ""),
+                        "user_id": c_user_id,
+                        "login": user_map.get(c_user_id, ""),
                     })
 
         grp_col = self.resolve_col("SYS_RULES_GRP_RULES", ["GROUP_ID", "GRR_GRP_ID", "GRP_ID", "RGR_GRP_ID"])
@@ -381,9 +405,13 @@ class UserMapper:
         if name_col:
             select_cols.append(name_col)
 
+        where = f"{login_col} = ?"
+        params = [login]
+        where, params = self._apply_non_blocked_user_filter(where, params)
+
         rows = fetch_dicts(self.conn,
-            f"SELECT {', '.join(select_cols)} FROM SYS_USR WHERE {login_col} = ?",
-            (login,))
+            f"SELECT {', '.join(select_cols)} FROM SYS_USR WHERE {where}",
+            params)
         if not rows:
             print(f"  \033[93m[!]\033[0m Usuario '\033[1m{login}\033[0m' nao encontrado em SYS_USR")
             return None
@@ -405,9 +433,6 @@ class UserMapper:
         pk = self.resolve_col("SYS_USR", pk_candidates)
         login_candidates = ["USR_CODIGO", "USR_LOGIN", "LOGIN", "USR_USERNAME", "USR_COD"]
         login_col = self.resolve_col("SYS_USR", login_candidates)
-        block_candidates = ["USR_MSBLQL", "USR_BLOQUEIO", "USR_BLOCKED", "USR_STATUS", "USR_ATIVO"]
-        block_col = self.resolve_col("SYS_USR", block_candidates)
-        del_col = self.resolve_col("SYS_USR", ["D_E_L_E_T_"])
         depto_candidates = ["USR_DEPTO", "USR_DEPT", "DEPTO", "DEPARTMENT"]
         depto_col = self.resolve_col("SYS_USR", depto_candidates)
         name_candidates = ["USR_NOME", "USR_NAME", "NOME", "NAME", "USR_FULLNAME"]
@@ -426,13 +451,7 @@ class UserMapper:
         where = "1=1"
         params = []
 
-        if block_col:
-            where += f" AND {block_col} = ?"
-            params.append("2")
-
-        if del_col:
-            where += f" AND {del_col} = ?"
-            params.append(" ")
+        where, params = self._apply_non_blocked_user_filter(where, params)
 
         rows = fetch_dicts(self.conn,
             f"SELECT {', '.join(select_cols)} FROM SYS_USR WHERE {where}",
@@ -969,9 +988,12 @@ class UserMapper:
                     "function_id": func_id, "menu_ids": menu_ids}
 
         placeholders = ",".join("?" for _ in user_ids)
+        where = f"{usr_pk} IN ({placeholders})"
+        params = list(user_ids)
+        where, params = self._apply_non_blocked_user_filter(where, params)
         user_rows = fetch_dicts(self.conn,
-            f"SELECT {usr_pk}, {usr_login} FROM SYS_USR WHERE {usr_pk} IN ({placeholders})",
-            list(user_ids))
+            f"SELECT {usr_pk}, {usr_login} FROM SYS_USR WHERE {where}",
+            params)
 
         allowed_user_ids = set()
         c_routine = str(routine or "").strip().upper()

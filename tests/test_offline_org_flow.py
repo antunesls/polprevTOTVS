@@ -25,7 +25,99 @@ class OfflineExportTest(unittest.TestCase):
         self.assertIn("SYS_RULES_TRANSACT", sql)
 
 
+class WizardMapeamentoTest(unittest.TestCase):
+    def test_wizard_asks_reuse_or_delete_and_respects_choice(self):
+        with patch("run.cfg.PRIVILEGE_MODE", "per_user"), \
+             patch("run.cfg.EMPRESA_NAME", "TESTE"), \
+             patch("run.cls"), \
+             patch("run.run_batch", return_value=None) as mock_batch, \
+             patch("run.run_batch_organizational", return_value=None) as mock_batch_org, \
+             patch("run.OUTPUT_DIR", tempfile.gettempdir()):
+            with patch("builtins.input", side_effect=[
+                "",       # ETAPA 1: ENTER = batch
+                "N",      # ETAPA 2: gerar SQL? nao
+                "N",      # ETAPA 4: gerar menu? nao
+                "N",      # ETAPA 6: gerar dashboard? nao
+                "N",      # NEW: apagar arquivos? nao (reusar)
+                "S",      # confirmacao
+            ]):
+                run.wizard_mapeamento("usr001")
+
+            mock_batch.assert_called_once_with(gen_priv=False, rule_name="", gen_dash=False, gen_menu=False, menu_link_mode="replace")
+            mock_batch_org.assert_not_called()
+
+    def test_wizard_asks_reuse_or_delete_delete_mode(self):
+        with patch("run._clear_generated_mapping_files", return_value=[]) as mock_clear:
+            with patch("run.cfg.PRIVILEGE_MODE", "per_user"), \
+                 patch("run.cfg.EMPRESA_NAME", "TESTE"), \
+                 patch("run.cls"), \
+                 patch("run.run_batch", return_value=None), \
+                 patch("run.run_batch_organizational", return_value=None):
+                with patch("builtins.input", side_effect=[
+                    "",       # ETAPA 1: ENTER = batch
+                    "N",      # ETAPA 2: gerar SQL? nao
+                    "N",      # ETAPA 4: gerar menu? nao
+                    "N",      # ETAPA 6: gerar dashboard? nao
+                    "S",      # NEW: apagar arquivos? sim
+                    "S",      # confirmacao
+                ]):
+                    run.wizard_mapeamento("usr001")
+
+                mock_clear.assert_called_once()
+
+
 class OrganizationalDashboardFlowTest(unittest.TestCase):
+    def test_clear_generated_mapping_files_removes_only_generated_artifacts(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir)
+            generated_files = [
+                "joao_access.json",
+                "joao_dashboard.html",
+                "joao_privileges.sql",
+                "joao_canonical_menus.sql",
+                "canonical_menus.sql",
+                "camadas_TESTE.html",
+                "camadas_departamentos_TESTE.html",
+                "clusters_TESTE.html",
+                "clusters_TESTE.json",
+                "TESTE_organizacional.sql",
+            ]
+            preserved_files = [
+                "export.json",
+                "export.sql",
+                "clean_privileges.sql",
+                "manual.txt",
+            ]
+
+            for file_name in generated_files + preserved_files:
+                Path(output_dir, file_name).write_text("conteudo", encoding="utf-8")
+            Path(output_dir, "logs").mkdir()
+            Path(output_dir, "logs", "session.log").write_text("log", encoding="utf-8")
+
+            with patch("run.OUTPUT_DIR", tmpdir):
+                removed = run._clear_generated_mapping_files()
+
+            self.assertEqual(sorted(removed), sorted(str(Path(output_dir, file_name)) for file_name in generated_files))
+            for file_name in generated_files:
+                self.assertFalse(Path(output_dir, file_name).exists())
+            for file_name in preserved_files:
+                self.assertTrue(Path(output_dir, file_name).exists())
+            self.assertTrue(Path(output_dir, "logs", "session.log").exists())
+
+    def test_load_reports_from_files_reuses_existing_access_files_without_cleanup(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            report_path = Path(tmpdir, "joao_access.json")
+            report_path.write_text(
+                '{"user":"joao","routines_summary":[{"routine":"MATA010"}]}',
+                encoding="utf-8",
+            )
+
+            with patch("run.OUTPUT_DIR", tmpdir):
+                reports = run._load_reports_from_files()
+
+            self.assertEqual([report["user"] for report in reports], ["joao"])
+            self.assertTrue(report_path.exists())
+
     def test_batch_organizational_sql_flow_calls_dashboard_generation_after_sql(self):
         reports = [
             {
@@ -77,18 +169,24 @@ class OrganizationalDashboardFlowTest(unittest.TestCase):
                  patch("run.print_schema_summary"), \
                  patch("run.UserMapper", FakeMapper), \
                  patch("src.organizational_privileges.OrganizationalPrivilegeGenerator", FakeGen), \
-                 patch("src.html_report.generate_cluster_html") as cluster_helper, \
-                 patch("src.department_html_report.generate_department_html") as dept_helper, \
-                 patch("webbrowser.open"), \
-                 patch("run.generate_department_validation_reports") as validation_helper:
+                  patch("src.html_report.generate_cluster_html") as cluster_helper, \
+                  patch("src.department_html_report.generate_department_html") as dept_helper, \
+                  patch("src.html_admin.generate_admin_html") as admin_helper, \
+                  patch("src.html_kanban.generate_kanban_html") as kanban_helper, \
+                  patch("src.html_tree.generate_tree_html") as tree_helper, \
+                  patch("webbrowser.open"), \
+                  patch("run.generate_department_validation_reports") as validation_helper:
                 mock_get_connection.return_value.__enter__.return_value = object()
                 mock_get_connection.return_value.__exit__.return_value = False
 
                 run.run_batch_organizational("2")
 
-                cluster_helper.assert_called_once()
-                dept_helper.assert_called_once()
-                validation_helper.assert_called_once()
+                admin_helper.assert_called_once()
+                cluster_helper.assert_not_called()
+                dept_helper.assert_not_called()
+                validation_helper.assert_not_called()
+                kanban_helper.assert_not_called()
+                tree_helper.assert_not_called()
 
     def test_main_menu_option_triggers_department_validation_report(self):
         with patch("run.cfg.PRIVILEGE_MODE", "organizational_layer"), \

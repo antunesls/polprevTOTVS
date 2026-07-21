@@ -5,6 +5,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from src.dashboard import generate_html
+from src.html_admin import generate_admin_html
 from src.html_report import generate_cluster_html
 
 
@@ -137,6 +138,92 @@ class HtmlReportPerformanceTest(unittest.TestCase):
 
         self.assertIn('"name": "P_CJ_VALIDO"', html)
         self.assertNotIn('"name": "P_CJ_INVALIDO"', html)
+
+
+class AdminDashboardHtmlTest(unittest.TestCase):
+    def test_admin_dashboard_has_bulk_rule_removal_controls(self):
+        inventory = {
+            "rules": [
+                {
+                    "rule_id": "A1",
+                    "rule_name": "P_EXISTENTE",
+                    "source": "EXISTENTE",
+                    "tier": "EXISTENTE",
+                    "action": "MANTER",
+                    "users": [{"user_id": "000001", "login": "joao"}],
+                    "groups": [],
+                    "routines": [],
+                },
+                {
+                    "rule_id": None,
+                    "rule_name": "P_NOVA",
+                    "source": "NOVO",
+                    "tier": "TIER3",
+                    "action": "CRIAR",
+                    "users": [{"user_id": "000002", "login": "maria"}],
+                    "groups": [],
+                    "routines": [],
+                },
+            ]
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_path = Path(tmpdir) / "admin.html"
+            generate_admin_html(inventory, str(output_path), "TESTE")
+            html = output_path.read_text(encoding="utf-8")
+
+        self.assertIn("Remover Selecionadas", html)
+        self.assertIn("Desfazer Selecionadas", html)
+        self.assertIn("bulkMarkSelected", html)
+        self.assertIn("SYS_RULES_USR_RULES SET D_E_L_E_T_", html)
+        self.assertNotIn("SYS_RULES SET D_E_L_E_T_", html)
+        self.assertNotIn("SYS_RULES_FEATURES SET D_E_L_E_T_", html)
+        self.assertNotIn("SYS_RULES_TRANSACT SET D_E_L_E_T_", html)
+
+    def test_admin_modal_shows_missing_features_for_complementar_rule(self):
+        inventory = {
+            "rules": [
+                {
+                    "rule_id": "A1",
+                    "rule_name": "P_EXISTENTE",
+                    "source": "EXISTENTE",
+                    "tier": "TIER3",
+                    "action": "COMPLEMENTAR",
+                    "users": [{"user_id": "000001", "login": "joao"}],
+                    "groups": [],
+                    "routines": [
+                        {
+                            "routine": "MATA010",
+                            "description": "Produtos",
+                            "features": [
+                                {"feature": "Visualizar", "access": "1", "menu_oper": 2, "menu_def": "A010VIS", "status": "EXISTENTE"},
+                                {"feature": "Alterar", "access": "1", "menu_oper": 4, "menu_def": "A010ALT", "status": "FALTANTE"},
+                                {"feature": "Excluir", "access": "1", "menu_oper": 5, "menu_def": "A010DEL", "status": "FALTANTE"},
+                            ],
+                        },
+                        {
+                            "routine": "FINA050",
+                            "description": "Contas a Pagar",
+                            "features": [
+                                {"feature": "Incluir", "access": "1", "menu_oper": 3, "menu_def": "FIN050INC", "status": "FALTANTE"},
+                            ],
+                        },
+                    ],
+                },
+            ]
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_path = Path(tmpdir) / "admin.html"
+            generate_admin_html(inventory, str(output_path), "TESTE")
+            html = output_path.read_text(encoding="utf-8")
+
+        self.assertIn("Funções que serão adicionadas", html)
+        self.assertIn("Alterar", html)
+        self.assertIn("Excluir", html)
+        self.assertIn("Incluir", html)
+        self.assertIn("MATA010", html)
+        self.assertIn("FINA050", html)
 
 
 class UserDashboardHtmlTest(unittest.TestCase):

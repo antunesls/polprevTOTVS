@@ -6,6 +6,7 @@ import time
 import threading
 import json
 import atexit
+import fnmatch
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -265,13 +266,14 @@ def wizard_mapeamento(current_login="usr001"):
     gen_dash = False
     gen_menu = False
     menu_link_mode = "replace"
+    clean_files = False
 
     wizard_box("WIZARD — Mapeamento de Acessos", "Passo a passo para mapear usuarios e gerar artefatos")
 
     # ETAPA 1 — Usuario
     while True:
         wizard_box("WIZARD — Mapeamento de Acessos")
-        wizard_step(1, 7, "Qual usuario deseja mapear?")
+        wizard_step(1, 8, "Qual usuario deseja mapear?")
         info("Digite o login do usuario ou ENTER para mapear TODOS os usuarios.")
         print()
         val = input(f"  {B}Usuario{R} [{D}{login} | ENTER = TODOS | X = cancelar{R}]: ").strip()
@@ -288,7 +290,7 @@ def wizard_mapeamento(current_login="usr001"):
     # ETAPA 2 — Gerar privilegios?
     while True:
         wizard_box("WIZARD — Mapeamento de Acessos")
-        wizard_step(2, 7, "Gerar script de privilegios (SQL)?")
+        wizard_step(2, 8, "Gerar script de privilegios (SQL)?")
         if is_org_mode:
             info("No modo organizacional, gera um SQL consolidado por camadas.")
             info("A geracao usa todos os usuarios, mesmo que um login especifico tenha sido informado.")
@@ -310,7 +312,7 @@ def wizard_mapeamento(current_login="usr001"):
             default_rule = f"ACESSOS_{login.upper()[:8]}"
         while True:
             wizard_box("WIZARD — Mapeamento de Acessos")
-            wizard_step(3, 7, "Nome do grupo de regras")
+            wizard_step(3, 8, "Nome do grupo de regras")
             info("Identificador do grupo de regras no Protheus (max 10 caracteres).")
             print()
             val = input(f"  {B}Nome da regra{R} [{D}{default_rule} | X = cancelar{R}]: ").strip()
@@ -328,7 +330,7 @@ def wizard_mapeamento(current_login="usr001"):
     # ETAPA 4 — Menu canonico?
     while True:
         wizard_box("WIZARD — Mapeamento de Acessos")
-        wizard_step(4, 7, "Gerar menu canonico por modulo?")
+        wizard_step(4, 8, "Gerar menu canonico por modulo?")
         info("Cria um menu unico por modulo com todas as rotinas encontradas.")
         info("A exibicao final continua sendo controlada por privilegios.")
         print()
@@ -343,7 +345,7 @@ def wizard_mapeamento(current_login="usr001"):
     if gen_menu:
         while True:
             wizard_box("WIZARD — Mapeamento de Acessos")
-            wizard_step(5, 7, "Como tratar os vinculos atuais do modulo?")
+            wizard_step(5, 8, "Como tratar os vinculos atuais do modulo?")
             info("S = substituir vinculos antigos do mesmo modulo")
             info("A = manter os existentes e adicionar o menu canonico")
             print()
@@ -362,7 +364,7 @@ def wizard_mapeamento(current_login="usr001"):
     # ETAPA 6 — Dashboard?
     while True:
         wizard_box("WIZARD — Mapeamento de Acessos")
-        wizard_step(6, 7, "Gerar dashboard HTML?")
+        wizard_step(6, 8, "Gerar dashboard HTML?")
         info("Gera um dashboard grafico com a arvore de menus e permissoes.")
         print()
         result = wizard_prompt_yn("Gerar dashboard?", "N")
@@ -372,10 +374,24 @@ def wizard_mapeamento(current_login="usr001"):
         gen_dash = result
         break
 
-    # ETAPA 7 — Confirmacao
+    # ETAPA 7 — Reusar ou apagar arquivos anteriores?
     while True:
         wizard_box("WIZARD — Mapeamento de Acessos")
-        wizard_step(7, 7, "Confirmacao")
+        wizard_step(7, 8, "Reusar arquivos ou apagar e recriar?")
+        info("S = apagar arquivos gerados anteriores e mapear do zero")
+        info("N = manter arquivos existentes e complementar o mapeamento")
+        print()
+        result = wizard_prompt_yn("Apagar arquivos gerados anteriores?", "N")
+        if result is None:
+            info("Wizard cancelado.")
+            return login
+        clean_files = result
+        break
+
+    # ETAPA 8 — Confirmacao
+    while True:
+        wizard_box("WIZARD — Mapeamento de Acessos")
+        wizard_step(8, 8, "Confirmacao")
 
         user_disp = login if not batch else f"{Y}TODOS (batch){R}"
         if gen_priv and is_org_mode:
@@ -384,12 +400,14 @@ def wizard_mapeamento(current_login="usr001"):
             priv_disp = f"{G}SIM{R} ({rule_name})" if gen_priv else f"{D}NAO{R}"
         menu_disp = f"{G}SIM{R} ({'substituir' if menu_link_mode == 'replace' else 'adicionar'})" if gen_menu else f"{D}NAO{R}"
         dash_disp = f"{G}SIM{R}" if gen_dash else f"{D}NAO{R}"
+        clean_disp = f"{G}APAGAR{R}" if clean_files else f"{D}REUSAR{R}"
 
         wizard_summary("Resumo da operacao", [
             ("Usuario       ", user_disp),
             ("Gerar SQL     ", priv_disp),
             ("Gerar Menu    ", menu_disp),
             ("Gerar Dashboard", dash_disp),
+            ("Arquivos      ", clean_disp),
         ])
 
         val = input(f"  {B}[S]{R} Executar  {D}[E]{R} Refazer  {D}[X]{R} Cancelar\n  {B}Opcao:{R} ").strip().upper()
@@ -405,6 +423,9 @@ def wizard_mapeamento(current_login="usr001"):
     # EXECUTAR
     cls()
     print(BANNER)
+
+    if clean_files:
+        _clear_generated_mapping_files()
 
     if gen_menu and not batch:
         warn("Menus canonicos sao gerados com base em TODOS os usuarios ativos.")
@@ -834,25 +855,13 @@ def _generate_org_dashboards(all_reports, tier1_routines, tier2_data, tier3_clus
         except Exception:
             existing_links = {}
 
-    users_detail = {}
-    user_routines_raw = {}
-    user_dept_map = {}
-    for rep in all_reports:
-        login = rep["user"]
-        top_routines = []
-        for r in rep.get("routines_summary", [])[:20]:
-            code = r.get("routine", "")
-            desc = r.get("description", "")
-            top_routines.append(f"{code} - {desc}" if desc else code)
-        users_detail[login] = {
-            "name": rep.get("user_name", login),
-            "login": login,
-            "depto": rep.get("user_depto", "") or "SEM_DEPARTAMENTO",
-            "total_routines": rep.get("total_routines", 0),
-            "all_routines": top_routines,
-        }
-        user_routines_raw[login] = user_routine_items(rep)
-        user_dept_map[login] = rep.get("user_depto", "").strip() or "SEM_DEPARTAMENTO"
+    if existing_links:
+        active_logins = {str(rep.get("user", "")).strip() for rep in all_reports or []}
+        for link_info in existing_links.values():
+            link_info["linked_users"] = [
+                user_info for user_info in link_info.get("linked_users", [])
+                if str(user_info.get("login", "")).strip() in active_logins
+            ]
 
     tier4_map = {}
     for user_entry in (tier4_users or []):
@@ -871,56 +880,14 @@ def _generate_org_dashboards(all_reports, tier1_routines, tier2_data, tier3_clus
         tier4_map,
     )
 
-    html_path = os.path.join(OUTPUT_DIR, f"camadas_{cfg.EMPRESA_NAME}.html")
-    from src.html_report import generate_cluster_html
-    generate_cluster_html(
-        {"routines": tier1_routines, "total_users": len(all_reports), "empresa": cfg.EMPRESA_NAME},
-        tier2_data, tier3_clusters, tier3_unclustered,
-        {"users": tier4_users},
-        users_detail, user_routines_raw, user_dept_map,
-        html_path, cfg.EMPRESA_NAME,
-        consolidated_inventory=consolidated,
-    )
-    dept_html_path = os.path.join(OUTPUT_DIR, f"camadas_departamentos_{cfg.EMPRESA_NAME}.html")
-    from src.department_html_report import generate_department_html
-    reports_with_context = []
-    for rep in all_reports:
-        login = rep.get("user")
-        related_clusters = [cluster for cluster in (tier3_clusters or []) if login in (cluster.get("users") or [])]
-        context = {
-            "global_created_sets": [cluster.get("name") for cluster in related_clusters if cluster.get("name")],
-            "reused_existing_rules": [cluster.get("reuses_existing_rule") for cluster in related_clusters if cluster.get("reuses_existing_rule")],
-        }
-        rep_with_context = dict(rep)
-        rep_with_context["organizational_context"] = context
-        reports_with_context.append(rep_with_context)
-
-    generate_department_html(
-        build_department_analysis(reports_with_context, existing_rules=existing_rules, global_clusters=tier3_clusters),
-        dept_html_path, cfg.EMPRESA_NAME,
-    )
-    validation_dir = os.path.join(OUTPUT_DIR, "departamentos")
-    validation_paths = generate_department_validation_reports(reports_with_context, validation_dir, cfg.EMPRESA_NAME)
-
     from src.html_admin import generate_admin_html
-    from src.html_kanban import generate_kanban_html
-    from src.html_tree import generate_tree_html
     admin_path = os.path.join(OUTPUT_DIR, "camadas_admin.html")
-    kanban_path = os.path.join(OUTPUT_DIR, "camadas_kanban.html")
-    tree_path = os.path.join(OUTPUT_DIR, "camadas_tree.html")
     generate_admin_html(consolidated, admin_path, cfg.EMPRESA_NAME)
-    generate_kanban_html(consolidated, kanban_path, cfg.EMPRESA_NAME)
-    generate_tree_html(consolidated, tree_path, cfg.EMPRESA_NAME)
 
     import webbrowser
-    webbrowser.open(f"file://{os.path.abspath(html_path)}")
-    print(f"  {G}Dashboard gerado:{R} {html_path}")
-    print(f"  {G}Dashboard por departamento gerado:{R} {dept_html_path}")
-    print(f"  {G}Relatorios por departamento gerados:{R} {validation_dir} ({len(validation_paths)} arquivos)")
+    webbrowser.open(f"file://{os.path.abspath(admin_path)}")
     print(f"  {G}Admin Panel gerado:{R} {admin_path}")
-    print(f"  {G}Kanban gerado:{R} {kanban_path}")
-    print(f"  {G}Split Tree gerado:{R} {tree_path}")
-    print(f"  {CY}O navegador foi aberto com as 4 camadas.{R}")
+    print(f"  {CY}O navegador foi aberto com o Admin Panel.{R}")
     print()
 
 
@@ -1406,12 +1373,23 @@ def menu_parametrizacao():
         llm_key_disp = "****" if cfg.LLM_API_KEY else "(nao definido)"
         llm_model_disp = cfg.LLM_MODEL[:28] if cfg.LLM_MODEL else "(nao definido)"
         llm_url_disp = cfg.LLM_BASE_URL[:28] if cfg.LLM_BASE_URL else "(nao definido)"
+        min_dept_disp = "2 usuarios" if cfg.IGNORE_SINGLE_USER_DEPARTMENTS else "1 usuario"
+        threshold_disp = str(cfg.CLUSTER_SIMILARITY_THRESHOLD)
+        min_cluster_disp = str(cfg.MIN_CLUSTER_SIZE)
 
         from src.config import API_CONFIG
+        api_enabled_disp = "SIM" if API_CONFIG.get("enabled") else "NAO"
         api_url_disp = API_CONFIG["base_url"][:28] if API_CONFIG["base_url"] else "(nao definido)"
         api_user_disp = API_CONFIG.get("api_username", "")[:28] if API_CONFIG.get("api_username") else "(nao definido)"
         api_pass_disp = "****" if API_CONFIG.get("api_password") else "(nao definido)"
+        api_token_disp = "****" if API_CONFIG.get("bearer_token") else "(nao definido)"
         api_tenant_disp = API_CONFIG.get("tenant_id", "")[:28] if API_CONFIG.get("tenant_id") else "(nao definido)"
+        api_erp_db_disp = API_CONFIG.get("erp_database", "")[:28] if API_CONFIG.get("erp_database") else "(nao definido)"
+        api_module_disp = API_CONFIG.get("erp_module", "")[:28] if API_CONFIG.get("erp_module") else "(nao definido)"
+        api_ssl_disp = "SIM" if API_CONFIG.get("verify_ssl") else "NAO"
+        api_timeout_disp = str(API_CONFIG.get("timeout", 30))
+        log_enabled_disp = "SIM" if cfg.FILE_LOGGING_ENABLED else "NAO"
+        log_dir_disp = cfg.LOG_DIR[:28] if cfg.LOG_DIR else "(nao definido)"
 
         print(f"  {L}╔{'═' * BOX}╗{R}")
         print(row(f"{L}║{R}  {B}PARAMETRIZACAO{R}"))
@@ -1428,17 +1406,30 @@ def menu_parametrizacao():
             print(row(f"{L}║{R}  {B}5{{A}}{R} │ {W}LLM API Key .......{R} [{D}{llm_key_disp}{R}]"))
             print(row(f"{L}║{R}  {B}5{{B}}{R} │ {W}LLM Model .........{R} [{D}{llm_model_disp}{R}]"))
             print(row(f"{L}║{R}  {B}5{{C}}{R} │ {W}LLM Base URL ......{R} [{D}{llm_url_disp}{R}]"))
+            print(row(f"{L}║{R}  {B}5{{D}}{R} │ {W}Min. depto .......{R} [{D}{min_dept_disp}{R}]"))
+            print(row(f"{L}║{R}  {B}5{{E}}{R} │ {W}Threshold Jaccard {R} [{D}{threshold_disp}{R}]"))
+            print(row(f"{L}║{R}  {B}5{{F}}{R} │ {W}Tam. conjunto ....{R} [{D}{min_cluster_disp}{R}]"))
         print(row(f"{L}║{R}  {D}{'─' * (BOX - 3)}{R}"))
         print(row(f"{L}║{R}  {B}6{R} │ {W}Modo de privilegio{R} [{G}{mode_disp}{R}]"))
         print(row(f"{L}║{R}  {D}{'─' * (BOX - 3)}{R}"))
         print(row(f"{L}║{R}  {B}7{R} │ {W}Testar conexao{R}"))
         print(row(f"{L}║{R}  {D}{'─' * (BOX - 3)}{R}"))
         print(row(f"{L}║{R}  {B}--- API Protheus ---{R}"))
+        print(row(f"{L}║{R}  {B}L{R} │ {W}API ativa .........{R} [{D}{api_enabled_disp}{R}]"))
         print(row(f"{L}║{R}  {B}A{R} │ {W}Base URL ..........{R} [{D}{api_url_disp}{R}]"))
         print(row(f"{L}║{R}  {B}B{R} │ {W}Usuario API .......{R} [{D}{api_user_disp}{R}]"))
         print(row(f"{L}║{R}  {B}C{R} │ {W}Senha API .........{R} [{D}{api_pass_disp}{R}]"))
+        print(row(f"{L}║{R}  {B}G{R} │ {W}Bearer Token ......{R} [{D}{api_token_disp}{R}]"))
         print(row(f"{L}║{R}  {B}E{R} │ {W}Tenant ID .........{R} [{D}{api_tenant_disp}{R}]"))
+        print(row(f"{L}║{R}  {B}H{R} │ {W}ERP Database ......{R} [{D}{api_erp_db_disp}{R}]"))
+        print(row(f"{L}║{R}  {B}I{R} │ {W}ERP Modulo ........{R} [{D}{api_module_disp}{R}]"))
+        print(row(f"{L}║{R}  {B}J{R} │ {W}Verify SSL ........{R} [{D}{api_ssl_disp}{R}]"))
+        print(row(f"{L}║{R}  {B}K{R} │ {W}Timeout API .......{R} [{D}{api_timeout_disp}s{R}]"))
         print(row(f"{L}║{R}  {B}T{R} │ {W}Testar API + Login{R}"))
+        print(row(f"{L}║{R}  {D}{'─' * (BOX - 3)}{R}"))
+        print(row(f"{L}║{R}  {B}--- Logs ---{R}"))
+        print(row(f"{L}║{R}  {B}M{R} │ {W}Log arquivo .......{R} [{D}{log_enabled_disp}{R}]"))
+        print(row(f"{L}║{R}  {B}O{R} │ {W}Diretorio logs ....{R} [{D}{log_dir_disp}{R}]"))
         print(row(f"{L}║{R}  {D}{'─' * (BOX - 3)}{R}"))
         print(row(f"{L}║{R}  {B}8{R} │ {W}Salvar configuracoes{R}"))
         print(row(f"{L}║{R}  {B}0{R} │ {RD}Voltar{R}"))
@@ -1509,6 +1500,41 @@ def menu_parametrizacao():
                 cfg.LLM_BASE_URL = val
                 success(f"LLM Base URL alterada para: {val}")
 
+        elif sub == "5D":
+            cfg.IGNORE_SINGLE_USER_DEPARTMENTS = not cfg.IGNORE_SINGLE_USER_DEPARTMENTS
+            min_users = cfg.department_min_users()
+            success(f"Minimo por departamento alterado para: {min_users} usuario(s)")
+
+        elif sub == "5E":
+            val = input(f"  Threshold Jaccard [{cfg.CLUSTER_SIMILARITY_THRESHOLD}]: ").strip()
+            if val:
+                try:
+                    threshold = float(val)
+                    if 0.0 <= threshold <= 1.0:
+                        cfg.CLUSTER_SIMILARITY_THRESHOLD = threshold
+                        import src.organizational_privileges as org_priv
+                        org_priv.CLUSTER_SIMILARITY_THRESHOLD = threshold
+                        success(f"Threshold Jaccard alterado para: {threshold}")
+                    else:
+                        error("Valor deve estar entre 0.0 e 1.0.")
+                except ValueError:
+                    error("Valor invalido. Use numero decimal, ex: 0.4.")
+
+        elif sub == "5F":
+            val = input(f"  Tamanho minimo do conjunto [{cfg.MIN_CLUSTER_SIZE}]: ").strip()
+            if val:
+                try:
+                    min_size = int(val)
+                    if min_size >= 1:
+                        cfg.MIN_CLUSTER_SIZE = min_size
+                        import src.organizational_privileges as org_priv
+                        org_priv.MIN_CLUSTER_SIZE = min_size
+                        success(f"Tamanho minimo do conjunto alterado para: {min_size}")
+                    else:
+                        error("Valor deve ser maior ou igual a 1.")
+                except ValueError:
+                    error("Valor invalido. Use numero inteiro, ex: 2.")
+
         elif sub == "6":
             if cfg.PRIVILEGE_MODE == "per_user":
                 cfg.PRIVILEGE_MODE = "organizational_layer"
@@ -1561,6 +1587,61 @@ def menu_parametrizacao():
             if val:
                 API_CONFIG["tenant_id"] = val
                 success(f"Tenant ID alterado para: {val}")
+
+        elif sub.upper() == "G":
+            from src.config import API_CONFIG
+            val = input(f"  Bearer Token [{'****' if API_CONFIG.get('bearer_token') else '(vazio)'}]: ").strip()
+            if val:
+                API_CONFIG["bearer_token"] = val
+                success("Bearer Token atualizado.")
+
+        elif sub.upper() == "H":
+            from src.config import API_CONFIG
+            val = input(f"  ERP Database [{API_CONFIG.get('erp_database', '')}]: ").strip()
+            if val:
+                API_CONFIG["erp_database"] = val
+                success(f"ERP Database alterado para: {val}")
+
+        elif sub.upper() == "I":
+            from src.config import API_CONFIG
+            val = input(f"  ERP Modulo [{API_CONFIG.get('erp_module', '')}]: ").strip()
+            if val:
+                API_CONFIG["erp_module"] = val.upper()
+                success(f"ERP Modulo alterado para: {API_CONFIG['erp_module']}")
+
+        elif sub.upper() == "J":
+            from src.config import API_CONFIG
+            API_CONFIG["verify_ssl"] = not bool(API_CONFIG.get("verify_ssl"))
+            success(f"Verify SSL alterado para: {'SIM' if API_CONFIG['verify_ssl'] else 'NAO'}")
+
+        elif sub.upper() == "K":
+            from src.config import API_CONFIG
+            val = input(f"  Timeout API em segundos [{API_CONFIG.get('timeout', 30)}]: ").strip()
+            if val:
+                try:
+                    timeout = int(val)
+                    if timeout > 0:
+                        API_CONFIG["timeout"] = timeout
+                        success(f"Timeout API alterado para: {timeout}s")
+                    else:
+                        error("Valor deve ser maior que zero.")
+                except ValueError:
+                    error("Valor invalido. Use numero inteiro, ex: 30.")
+
+        elif sub.upper() == "L":
+            from src.config import API_CONFIG
+            API_CONFIG["enabled"] = not bool(API_CONFIG.get("enabled"))
+            success(f"API alterada para: {'ativa' if API_CONFIG['enabled'] else 'inativa'}")
+
+        elif sub.upper() == "M":
+            cfg.FILE_LOGGING_ENABLED = not cfg.FILE_LOGGING_ENABLED
+            success(f"Log em arquivo alterado para: {'SIM' if cfg.FILE_LOGGING_ENABLED else 'NAO'}")
+
+        elif sub.upper() == "O":
+            val = input(f"  Diretorio de logs [{cfg.LOG_DIR}]: ").strip()
+            if val:
+                cfg.LOG_DIR = val
+                success(f"Diretorio de logs alterado para: {val}")
 
         elif sub.upper() == "T":
             from src.config import API_CONFIG
@@ -1754,6 +1835,7 @@ def wizard_organizacional():
                     t = float(val)
                     if 0.0 <= t <= 1.0:
                         org_priv.CLUSTER_SIMILARITY_THRESHOLD = t
+                        cfg.CLUSTER_SIMILARITY_THRESHOLD = t
                         success(f"Threshold: {G}{t}{R}")
                         break
                     else:
@@ -1786,6 +1868,7 @@ def wizard_organizacional():
                 s = int(val)
                 if s >= 1:
                     org_priv.MIN_CLUSTER_SIZE = s
+                    cfg.MIN_CLUSTER_SIZE = s
                     success(f"Tamanho minimo: {G}{s}{R}")
                 else:
                     error("Valor deve ser maior ou igual a 1.")
@@ -1887,6 +1970,7 @@ def wizard_organizacional():
                 if val:
                     try:
                         org_priv.CLUSTER_SIMILARITY_THRESHOLD = float(val)
+                        cfg.CLUSTER_SIMILARITY_THRESHOLD = org_priv.CLUSTER_SIMILARITY_THRESHOLD
                     except ValueError:
                         pass
 
@@ -1895,6 +1979,7 @@ def wizard_organizacional():
                 if val:
                     try:
                         org_priv.MIN_CLUSTER_SIZE = int(val)
+                        cfg.MIN_CLUSTER_SIZE = org_priv.MIN_CLUSTER_SIZE
                     except ValueError:
                         pass
 
@@ -2182,6 +2267,43 @@ def _load_reports_from_files():
     return reports
 
 
+def _clear_generated_mapping_files():
+    patterns = [
+        "*_access.json",
+        "*_dashboard.html",
+        "*_privileges.sql",
+        "*_canonical_menus.sql",
+        "canonical_menus.sql",
+        "camadas_*.html",
+        "clusters_*.html",
+        "clusters_*.json",
+        "*_organizacional.sql",
+    ]
+    preserved_files = {"clean_privileges.sql"}
+
+    if not os.path.isdir(OUTPUT_DIR):
+        return []
+
+    removed = []
+    for file_name in os.listdir(OUTPUT_DIR):
+        if file_name in preserved_files:
+            continue
+        file_path = os.path.join(OUTPUT_DIR, file_name)
+        if not os.path.isfile(file_path):
+            continue
+        if not any(fnmatch.fnmatch(file_name, pattern) for pattern in patterns):
+            continue
+        try:
+            os.remove(file_path)
+            removed.append(file_path)
+        except OSError:
+            pass
+
+    if removed:
+        info(f"Arquivos gerados anteriores removidos: {len(removed)}")
+    return removed
+
+
 def run_organizational_analysis():
     global _saved_llm_clusters
 
@@ -2224,6 +2346,7 @@ def run_organizational_analysis():
         print(f"  {C['green']}Carregados {len(all_reports)} relatorios da pasta output/{C['reset']}")
         schema = None
     elif action == "M":
+        _clear_generated_mapping_files()
         all_reports = None
         schema = None
     else:
@@ -2397,96 +2520,20 @@ def run_organizational_analysis():
     exclusive_count = sum(1 for u in tier4_users if u["exclusive_count"] > 0)
     print(f"  Usuarios com rotinas exclusivas: {C['green']}{exclusive_count}{C['reset']}")
 
-    section("DASHBOARD")
-    users_detail = {}
-    user_routines_raw = {}
-    user_dept_map = {}
-    for rep in all_reports:
-        login = rep["user"]
-        top_routines = []
-        for r in rep.get("routines_summary", [])[:20]:
-            code = r.get("routine", "")
-            desc = r.get("description", "")
-            top_routines.append(f"{code} - {desc}" if desc else code)
-        users_detail[login] = {
-            "name": rep.get("user_name", login),
-            "login": login,
-            "depto": rep.get("user_depto", "") or "SEM_DEPARTAMENTO",
-            "total_routines": rep.get("total_routines", 0),
-            "all_routines": top_routines,
-        }
-        user_routines_raw[login] = user_routine_items(rep)
-        user_dept_map[login] = rep.get("user_depto", "").strip() or "SEM_DEPARTAMENTO"
-
-    html_path = os.path.join(OUTPUT_DIR, f"camadas_{cfg.EMPRESA_NAME}.html")
-    from src.html_report import generate_cluster_html
-    generate_cluster_html(
-        {"routines": tier1_routines, "total_users": len(all_reports), "empresa": cfg.EMPRESA_NAME},
-        tier2_data,
-        tier3_clusters,
-        tier3_unclustered,
-        {"users": tier4_users},
-        users_detail,
-        user_routines_raw,
-        user_dept_map,
-        html_path,
-        cfg.EMPRESA_NAME,
-    )
-
-    dept_html_path = os.path.join(OUTPUT_DIR, f"camadas_departamentos_{cfg.EMPRESA_NAME}.html")
-    from src.department_html_report import generate_department_html
     try:
         with get_connection() as rules_conn:
             existing_rules = load_existing_rules(rules_conn)
     except Exception:
         existing_rules = None
-    generate_department_html(
-        build_department_analysis(all_reports, existing_rules=existing_rules),
-        dept_html_path,
-        cfg.EMPRESA_NAME,
+    _generate_org_dashboards(
+        all_reports,
+        tier1_routines,
+        tier2_data,
+        tier3_clusters,
+        tier3_unclustered,
+        tier4_users,
+        existing_rules=existing_rules,
     )
-
-    import webbrowser
-    webbrowser.open(f"file://{os.path.abspath(html_path)}")
-    print(f"  {C['green']}Dashboard gerado:{C['reset']} {html_path}")
-    print(f"  {C['green']}Dashboard por departamento gerado:{C['reset']} {dept_html_path}")
-    print(f"  {C['cyan']}O navegador foi aberto com as 4 camadas.{C['reset']}")
-    print()
-    print(f"  {C['bold']}No navegador:{C['reset']}")
-    print(f"    - Aba TIER 1: rotinas comuns a todos")
-    print(f"    - Aba TIER 2: rotinas por departamento")
-    print(f"    - Aba TIER 3: revise conjuntos funcionais de rotinas")
-    print(f"    - Aba TIER 4: exclusivas (recalcula ao mexer Tier 3)")
-    print(f"    - Clique em {C['bold']}Salvar JSON{C['reset']} e salve na pasta output/")
-    print()
-
-    json_path = os.path.join(OUTPUT_DIR, f"clusters_{cfg.EMPRESA_NAME}.json")
-    print(f"  {C['cyan']}╔{'═' * 54}╗{C['reset']}")
-    print(f"  {C['cyan']}║{C['reset']} {C['bold']}[C]{C['reset']} Carregar JSON de {OUTPUT_DIR}/clusters_{cfg.EMPRESA_NAME}.json")
-    print(f"  {C['cyan']}║{C['reset']} {C['bold']}[V]{C['reset']} Voltar (descartar tudo)")
-    print(f"  {C['cyan']}╚{'═' * 54}╝{C['reset']}")
-    action2 = input(f"  Opcao: ").strip().upper()
-
-    if action2 == "V":
-        info("Conjuntos funcionais descartados.")
-        return
-
-    if action2 == "C":
-        if not os.path.exists(json_path):
-            warn(f"Arquivo nao encontrado: {json_path}")
-            print(f"  Salve o JSON do navegador primeiro e renomeie para clusters_{cfg.EMPRESA_NAME}.json")
-            return
-        with open(json_path, "r", encoding="utf-8") as f:
-            loaded = json.load(f)
-        tier3_saved = loaded.get("tier3", loaded).get("clusters", loaded.get("clusters", []))
-        if not tier3_saved:
-            warn("JSON nao contem conjuntos funcionais do Tier 3.")
-            return
-        _saved_llm_clusters = tier3_saved
-        ok(f"{len(tier3_saved)} conjuntos funcionais carregados. Use opcao 3 para gerar o SQL.")
-    else:
-        warn("Opcao invalida. Conjuntos funcionais descartados.")
-        return
 
 
 def run_generate_org_sql():
