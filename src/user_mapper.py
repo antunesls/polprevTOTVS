@@ -8,10 +8,508 @@ BROWSE_FEATURES = [
     "Cod.Barra", "Copiar", "Retornar", "Prep.Doc.Saida", "Extra",
 ]
 
-USER_ACCESS_CODE_DESCRIPTIONS = {
-    "112": "Gerar rel. no servidor",
-    "121": "Usa impressora no server",
+USER_ACCESS_CODES = {
+    "101": {
+        "name": "Imprime param. relatórios",
+        "description": "Define se os parâmetros utilizados na emissão do relatório serão impressos.",
+        "functions": ["Acesso genérico para relatórios"],
+    },
+    "102": {
+        "name": "Imprime param. telas",
+        "description": "Define se os parâmetros utilizados nas telas serão impressos.",
+        "functions": ["Acesso genérico para telas"],
+    },
+    "103": {
+        "name": "Força Expurgo de Dados",
+        "description": "Permite ao usuário forçar o expurgo de dados, independentemente dos parâmetros configurados.",
+        "functions": ["Expurgo de Dados"],
+    },
+    "104": {
+        "name": "Imprimir Rel. Direto na Impressora",
+        "description": "Permite que o relatório seja impresso diretamente na impressora configurada, sem visualização prévia.",
+        "functions": ["Acesso genérico para relatórios"],
+    },
+    "105": {
+        "name": "Acessar ExecAuto em Background",
+        "description": "Permite que o usuário execute rotinas ExecAuto em modo Background.",
+        "functions": ["ExecAuto"],
+    },
+    "106": {
+        "name": "Nova Regra para Rotina Nova",
+        "description": "Cria automaticamente uma nova regra de acesso quando uma rotina nova é identificada no menu do usuário.",
+        "functions": ["Configurador de Acessos"],
+    },
+    "107": {
+        "name": "Edita Código de Regras",
+        "description": "Permite ao usuário editar o código de identificação das regras de acesso.",
+        "functions": ["Configurador de Acessos"],
+    },
+    "108": {
+        "name": "Acesso as Configurações do SmartClient",
+        "description": "Permite ao usuário acessar o menu de configurações do SmartClient.",
+        "functions": ["SmartClient"],
+    },
+    "109": {
+        "name": "Exportar Dicionário de Dados",
+        "description": "Permite ao usuário exportar o Dicionário de Dados do sistema.",
+        "functions": ["Dicionário de Dados"],
+    },
+    "110": {
+        "name": "Força Acesso a um Ambiente Específico",
+        "description": "Permite ao usuário forçar o acesso a um ambiente que não seja o seu ambiente padrão de login.",
+        "functions": ["Ambiente"],
+    },
+    "111": {
+        "name": "Libera a Troca de Interfaces",
+        "description": "Permite ao usuário trocar entre o SmartClient e a interface Web, se disponível.",
+        "functions": ["Interface"],
+    },
+    "112": {
+        "name": "Gerar rel. no servidor",
+        "description": "Permite que o relatório seja gerado no servidor de aplicação (AppServer) em vez de localmente no SmartClient.",
+        "functions": ["Acesso genérico para relatórios"],
+    },
+    "113": {
+        "name": "Acessar Módulo em Manutenção",
+        "description": "Permite ao usuário acessar módulos que estão em manutenção, com acesso restrito.",
+        "functions": ["Acesso genérico para módulos"],
+    },
+    "114": {
+        "name": "Permite Planilhas com Infinitas Linhas",
+        "description": "Permite ao usuário gerar planilhas sem limite de linhas.",
+        "functions": ["Acesso genérico para planilhas/gráficos"],
+    },
+    "115": {
+        "name": "Configurador de Perfil de Acesso",
+        "description": "Permite ao usuário acessar o Configurador de Perfil de Acesso.",
+        "functions": ["Configurador de Acessos"],
+    },
+    "116": {
+        "name": "Permite envio de email de dentro do Protheus",
+        "description": "Concede permissão para o usuário enviar e-mails a partir de rotinas do Protheus (Exceto rotinas de workflow).",
+        "functions": ["E-mail"],
+    },
+    "117": {
+        "name": "Permite Visualizar Relatórios (pdf) na própria tela",
+        "description": "Permite ao usuário visualizar os relatórios em formato PDF na própria tela do SmartClient (Visualizador integrado).",
+        "functions": ["Acesso genérico para relatórios"],
+    },
+    "118": {
+        "name": "Abrir Arquivos - Ferramenta de Análise de Dados",
+        "description": "Permite ao usuário abrir arquivos na Ferramenta de Análise de Dados.",
+        "functions": ["Ferramenta de Análise de Dados"],
+    },
+    "119": {
+        "name": "Libera Senha para Impressão - Espelhamento",
+        "description": "Libera a solicitação de senha ao realizar impressão de espelhamento.",
+        "functions": ["Acesso genérico para relatórios"],
+    },
+    "120": {
+        "name": "Permite Carga de Dados via Planilha de Interface",
+        "description": "Permite a carga de dados para tabelas Protheus via planilha de interface.",
+        "functions": ["Acesso genérico para planilhas/gráficos"],
+    },
+    "121": {
+        "name": "Usa impressora no server",
+        "description": "Permite que o usuário utilize as impressoras registradas no servidor de aplicação para a emissão de relatórios.",
+        "functions": ["Acesso genérico para relatórios"],
+    },
+    "122": {
+        "name": "Exportar Dados para Planilha de Trabalho",
+        "description": "Permite ao usuário exportar dados de grids/tabelas para uma planilha de trabalho.",
+        "functions": ["Acesso genérico para planilhas/gráficos"],
+    },
+    "123": {
+        "name": "Configurações Relatório B.I.",
+        "description": "Permite ao usuário acessar as configurações de Relatórios de B.I.",
+        "functions": ["Ferramentas de BI"],
+    },
+    "124": {
+        "name": "Permite ao usuário iniciar o Protheus em Modo Administrador",
+        "description": "Permite ao usuário iniciar o Protheus em Modo Administrador, concedendo poderes especiais.",
+        "functions": ["Admin"],
+    },
+    "125": {
+        "name": "Permite configurar Caminho Arquivos",
+        "description": "Habilita o botão 'Caminho Arquivos' nas telas que permitem anexar arquivos.",
+        "functions": ["Acesso genérico para arquivos/documentos"],
+    },
+    "126": {
+        "name": "Permite configurar Arquivos",
+        "description": "Habilita o botão 'Arquivos' nas telas que permitem anexar arquivos.",
+        "functions": ["Acesso genérico para arquivos/documentos"],
+    },
+    "127": {
+        "name": "Configurar Pasta de Trabalho",
+        "description": "Permite ao usuário configurar a pasta de trabalho onde são salvos os arquivos de configuração local.",
+        "functions": ["SmartClient"],
+    },
+    "128": {
+        "name": "Permite Usar a Função Falar",
+        "description": "Habilita a função 'Falar' no Protheus, que lê em voz alta mensagens e campos.",
+        "functions": ["Acessibilidade"],
+    },
+    "129": {
+        "name": "Acesso à Câmera",
+        "description": "Permite ao usuário utilizar a câmera do dispositivo para captura de imagens.",
+        "functions": ["Acesso genérico para câmera"],
+    },
+    "130": {
+        "name": "Acesso Full Administrador do Protheus",
+        "description": "Concede ao usuário acesso total de administrador do sistema, permitindo acessar todas as rotinas sem restrições de regras.",
+        "functions": ["Admin"],
+    },
+    "131": {
+        "name": "Permite reimpressão de etiquetas",
+        "description": "Permite ao usuário reimprimir etiquetas de produtos.",
+        "functions": ["Etiquetas/Código de Barras"],
+    },
+    "132": {
+        "name": "Permite acesso ao Configurador de Acessos",
+        "description": "Permite ao usuário acessar a tela principal do Configurador de Acessos.",
+        "functions": ["Configurador de Acessos"],
+    },
+    "133": {
+        "name": "Permite configurar arquivos para Download",
+        "description": "Habilita o botão 'Download' nas telas que permitem anexar arquivos.",
+        "functions": ["Acesso genérico para arquivos/documentos"],
+    },
+    "134": {
+        "name": "Permite acesso ao Questionário do Protheus",
+        "description": "Habilita o acesso à rotina de Questionário do Protheus (Perguntas e Respostas).",
+        "functions": ["Configuração"],
+    },
+    "135": {
+        "name": "Permite bloquear transmissões de NF-e",
+        "description": "Permite ao usuário bloquear a transmissão de NF-e.",
+        "functions": ["NF-e"],
+    },
+    "136": {
+        "name": "Configurador de Regras por Usuário",
+        "description": "Ao editar um usuário, habilita o botão 'Regras de Usuário' para configurar regras por usuário no módulo Configurador.",
+        "functions": ["Cadastro de Usuários"],
+    },
+    "137": {
+        "name": "Permite Implantação de Dicionário de Dados",
+        "description": "Permite ao usuário realizar a implantação do dicionário de dados (criação/alteração de tabelas).",
+        "functions": ["Dicionário de Dados"],
+    },
+    "138": {
+        "name": "Permite Exclusão do Dicionário de Dados",
+        "description": "Permite ao usuário excluir tabelas via Dicionário de Dados.",
+        "functions": ["Dicionário de Dados"],
+    },
+    "139": {
+        "name": "Permite Envio de Anexo de NF-e",
+        "description": "Habilita o envio de arquivos anexos relacionados à NF-e.",
+        "functions": ["NF-e"],
+    },
+    "140": {
+        "name": "Acesso ao Cadastro de Parâmetros",
+        "description": "Permite ao usuário acessar o Cadastro de Parâmetros (SX6).",
+        "functions": ["Cadastro de Parâmetros"],
+    },
+    "141": {
+        "name": "Visualiza rotinas Bloqueadas",
+        "description": "Permite ao usuário visualizar rotinas que estão bloqueadas (em manutenção).",
+        "functions": ["Acesso genérico para rotinas"],
+    },
+    "142": {
+        "name": "Permite acessar cadastro de Exceção de Bloqueio",
+        "description": "Permite ao usuário acessar o Cadastro de Exceção de Bloqueio.",
+        "functions": ["Cadastro de Parâmetros"],
+    },
+    "143": {
+        "name": "Acesso Admin - Workflow",
+        "description": "Concede ao usuário acesso total às funcionalidades de Workflow.",
+        "functions": ["Workflow"],
+    },
+    "144": {
+        "name": "Permite Configurar Serviços Aguá/Prata",
+        "description": "Permite ao usuário configurar os Serviços Aguá/Prata.",
+        "functions": ["Serviços"],
+    },
+    "145": {
+        "name": "Permite Configurar Serviços do Protheus",
+        "description": "Permite ao usuário configurar os Serviços do Protheus.",
+        "functions": ["Serviços"],
+    },
+    "146": {
+        "name": "Permite realizar Backup de Base via Protheus",
+        "description": "Permite ao usuário realizar backup de bases de dados através do Protheus.",
+        "functions": ["Backup"],
+    },
+    "147": {
+        "name": "Permite realizar Restore de Base via Protheus",
+        "description": "Permite ao usuário realizar restauração de bases de dados através do Protheus.",
+        "functions": ["Backup"],
+    },
+    "148": {
+        "name": "Permite Configurar Serviços Nuvem",
+        "description": "Permite ao usuário configurar os Serviços de Nuvem.",
+        "functions": ["Serviços"],
+    },
+    "149": {
+        "name": "Permite acessar ao Módulo EAD",
+        "description": "Permite ao usuário acessar o Módulo de EAD (Ensino a Distância).",
+        "functions": ["EAD"],
+    },
+    "150": {
+        "name": "Permite Acesso Ao Café",
+        "description": "Permite ao usuário acessar a plataforma social Café.",
+        "functions": ["Café"],
+    },
+    "151": {
+        "name": "Permite acessar outras Filiais",
+        "description": "O usuário que possuir esse acesso não terá Restrição de Dados pela Estrutura de Grupo de Empresas (por Filial).",
+        "functions": ["Restrição de Dados pela Estrutura de Grupo de Empresas"],
+    },
+    "152": {
+        "name": "Permite Acesso ao T.E.S.T.E",
+        "description": "Permite ao usuário acessar o ambiente T.E.S.T.E (TOTVS Exclusive System for Tests and Education).",
+        "functions": ["T.E.S.T.E"],
+    },
+    "153": {
+        "name": "Permite acessar Ações para Melhorias",
+        "description": "Permite ao usuário acesso ao cadastro de Ações para Melhorias e Inovações (Sugestões).",
+        "functions": ["Inovação"],
+    },
+    "154": {
+        "name": "Permite Configurar Processos Eletrônicos (Workflow)",
+        "description": "Permite ao usuário configurar processos eletrônicos (Workflow).",
+        "functions": ["Workflow"],
+    },
+    "155": {
+        "name": "Acessar Serviços Aguá/Prata",
+        "description": "Permite ao usuário acessar os Serviços Aguá/Prata.",
+        "functions": ["Serviços"],
+    },
+    "156": {
+        "name": "Libera a troca de Usuário / Empresa / Filial",
+        "description": "Permite que o usuário fure a trava que restringe o login a um usuário, empresa e filial fixa.",
+        "functions": ["Admin"],
+    },
+    "157": {
+        "name": "Permite acesso ao Ambiente de Desenvolvimento",
+        "description": "Permite ao usuário acessar o Ambiente de Desenvolvimento (TDS).",
+        "functions": ["Desenvolvimento"],
+    },
+    "158": {
+        "name": "Permite Utilização de Rotinas Automáticas",
+        "description": "Permite ao usuário executar rotinas automáticas programadas.",
+        "functions": ["Rotinas Automáticas"],
+    },
+    "159": {
+        "name": "Acesso ao Módulo Fiscal",
+        "description": "Permite ao usuário total acesso ao Módulo Fiscal.",
+        "functions": ["Módulo Fiscal"],
+    },
+    "160": {
+        "name": "Permite Acesso à rotina de Log de Auditoria",
+        "description": "Permite ao usuário acessar a rotina de Log de Auditoria do Protheus.",
+        "functions": ["Log de Auditoria"],
+    },
+    "161": {
+        "name": "Permite Uso do Dispositivo Móvel",
+        "description": "Permite ao usuário acessar as funcionalidades através do Dispositivo Móvel.",
+        "functions": ["Dispositivo Móvel"],
+    },
+    "162": {
+        "name": "Permite Integração com o Google Maps",
+        "description": "Permite ao usuário utilizar as funcionalidades de integração com o Google Maps (Geolocalização).",
+        "functions": ["Geolocalização"],
+    },
+    "163": {
+        "name": "Permite Acesso ao Gestão de Cópias (GIT)",
+        "description": "Permite ao usuário acessar a ferramenta de Gestão de Cópias (Versionamento).",
+        "functions": ["Desenvolvimento"],
+    },
+    "164": {
+        "name": "Permite Acesso à Agenda do Protheus",
+        "description": "Permite ao usuário acessar a Agenda do Protheus (Calendário de Tarefas).",
+        "functions": ["Agenda"],
+    },
+    "165": {
+        "name": "Permite Acesso ao 'Protheus News'",
+        "description": "Permite ao usuário acessar o 'Protheus News' (Notícias e Atualizações).",
+        "functions": ["Protheus News"],
+    },
+    "166": {
+        "name": "Permite Acesso à anotações da ocorrencia de um chamado",
+        "description": "Permite ao usuário acessar as anotações das ocorrências de um chamado.",
+        "functions": ["Chamados"],
+    },
+    "167": {
+        "name": "Permite Login Unificado",
+        "description": "Permite ao usuário realizar Login Unificado com outros sistemas TOTVS.",
+        "functions": ["Login"],
+    },
+    "168": {
+        "name": "Permite Acesso ao TOTVS Digital",
+        "description": "Permite ao usuário acessar o TOTVS Digital.",
+        "functions": ["TOTVS Digital"],
+    },
+    "169": {
+        "name": "Permite Acesso ao 'Bate Papo'",
+        "description": "Permite ao usuário acessar o 'Bate Papo' (Chat interno).",
+        "functions": ["Bate Papo"],
+    },
+    "170": {
+        "name": "Permite habilitar a manutenção de mensagens",
+        "description": "Permite ao usuário habilitar a manutenção de mensagens (MSG).",
+        "functions": ["Configuração"],
+    },
+    "171": {
+        "name": "Permite Acesso ao TOTVS Stream",
+        "description": "Permite ao usuário acessar o TOTVS Stream.",
+        "functions": ["TOTVS Stream"],
+    },
+    "172": {
+        "name": "Permite que sejam feitas alterações na logomarca do sistema",
+        "description": "Permite ao usuário alterar a logomarca do sistema.",
+        "functions": ["Configuração"],
+    },
+    "173": {
+        "name": "Permite Acesso ao TOTVS Analytics",
+        "description": "Permite ao usuário acessar o TOTVS Analytics.",
+        "functions": ["Ferramentas de BI"],
+    },
+    "174": {
+        "name": "Permite Acesso ao TOTVS Cloud",
+        "description": "Permite ao usuário acessar as configurações do TOTVS Cloud.",
+        "functions": ["Cloud"],
+    },
+    "175": {
+        "name": "Permite Remessa e Retorno - CNAB",
+        "description": "Permite ao usuário realizar remessa e retorno CNAB.",
+        "functions": ["CNAB"],
+    },
+    "176": {
+        "name": "Permite Acesso à Central de Atendimento",
+        "description": "Permite ao usuário acessar a Central de Atendimento ao Cliente.",
+        "functions": ["Central de Atendimento"],
+    },
+    "177": {
+        "name": "Permite Acesso ao Protheus Analytics (Antigo)",
+        "description": "Permite ao usuário acessar o Protheus Analytics (versão anterior).",
+        "functions": ["Ferramentas de BI"],
+    },
+    "178": {
+        "name": "Habilita o Botão do Explorer",
+        "description": "Habilita o botão do Explorer no Protheus.",
+        "functions": ["SmartClient"],
+    },
+    "179": {
+        "name": "Permite Acesso à atualização de Cadastros via Planilhas",
+        "description": "Permite ao usuário realizar atualização de cadastros via importação de planilhas.",
+        "functions": ["Acesso genérico para planilhas/gráficos"],
+    },
+    "180": {
+        "name": "Permite Acesso ao 'Eventos do Protheus'",
+        "description": "Permite ao usuário acessar a rotina de Eventos do Protheus.",
+        "functions": ["Eventos"],
+    },
+    "181": {
+        "name": "Permite Acesso ao 'Minhas Notificações'",
+        "description": "Permite ao usuário acessar a central de 'Minhas Notificações'.",
+        "functions": ["Notificações"],
+    },
+    "182": {
+        "name": "Permite Acesso ao Protheus Data Lake",
+        "description": "Permite ao usuário acessar e configurar o Data Lake.",
+        "functions": ["Data Lake"],
+    },
+    "183": {
+        "name": "Permite configurar abertura de Caminho de pastas",
+        "description": "Permite ao usuário configurar a abertura de caminhos de pastas.",
+        "functions": ["Configuração"],
+    },
+    "184": {
+        "name": "Permite Acesso ao TOTVS Assinatura Eletrônica",
+        "description": "Permite ao usuário utilizar a Assinatura Eletrônica.",
+        "functions": ["Assinatura Eletrônica"],
+    },
+    "185": {
+        "name": "Permite Acesso ao TOTVS Gestão de Contratos",
+        "description": "Permite ao usuário acessar o Gestão de Contratos.",
+        "functions": ["Contratos"],
+    },
+    "186": {
+        "name": "Permite Acesso ao TOTVS Robô",
+        "description": "Permite ao usuário acessar o TOTVS Robô (Automação).",
+        "functions": ["Automação"],
+    },
+    "187": {
+        "name": "Permite Acesso ao Monitoramento de Transações",
+        "description": "Permite ao usuário acessar o Monitoramento de Transações.",
+        "functions": ["Monitoramento"],
+    },
+    "188": {
+        "name": "Visualiza Registros Excluídos (Lixeira)",
+        "description": "Não possui mais sentido de uso e será retirado do sistema num futuro próximo. Permitia ao usuário visualizar registros excluídos (Lixeira).",
+        "functions": ["Acesso genérico para registros"],
+    },
+    "189": {
+        "name": "Permite Acesso a Rotinas de Auditoria do Protheus",
+        "description": "Permite ao usuário acessar as rotinas de Auditoria do Protheus.",
+        "functions": ["Auditoria"],
+    },
+    "190": {
+        "name": "Permite Acesso ao 'Time Line'",
+        "description": "Permite ao usuário acessar a timeline de atualizações.",
+        "functions": ["Timeline"],
+    },
+    "191": {
+        "name": "Permite Acesso ao 'Protheus Docs'",
+        "description": "Permite ao usuário acessar o 'Protheus Docs' (Consultas).",
+        "functions": ["Documentação"],
+    },
+    "192": {
+        "name": "Acesso a Dados Pessoais",
+        "description": "O usuário que tiver esse Acesso terá permissão para visualizar relatórios/rotinas com dados pessoais.",
+        "functions": ["LGPD - Dados Pessoais"],
+    },
+    "193": {
+        "name": "Acesso a Dados Sensíveis",
+        "description": "O usuário que tiver esse Acesso terá permissão para visualizar relatórios/rotinas com dados sensíveis.",
+        "functions": ["LGPD - Dados Sensíveis"],
+    },
+    "194": {
+        "name": "Pode executar o migrador de versão/release",
+        "description": "O usuário que tiver esse Acesso terá permissão para executar o migrador de versão/release.",
+        "functions": ["Migrador de Versão/Release"],
+    },
+    "195": {
+        "name": "Reabertura de estoque",
+        "description": "O usuário que possuir esse acesso terá permissão para reabrir o fechamento de estoque.",
+        "functions": ["Fechamento de Estoque"],
+    },
+    "196": {
+        "name": "Filtro - Visualiza outras filiais",
+        "description": "O usuário que possuir esse acesso não terá Restrição de Dados pela Estrutura de Grupo de Empresas (por Filial).",
+        "functions": ["Restrição de Dados pela Estrutura de Grupo de Empresas"],
+    },
+    "197": {
+        "name": "Filtro - Visualiza outras Unidades de Negócio",
+        "description": "O usuário que possuir esse acesso não terá Restrição de Dados pela Estrutura de Grupo de Empresas (por Unidade de Negócio).",
+        "functions": ["Restrição de Dados pela Estrutura de Grupo de Empresas"],
+    },
+    "198": {
+        "name": "Filtro - Visualiza outras Empresas",
+        "description": "O usuário que possuir esse acesso não terá Restrição de Dados pela Estrutura de Grupo de Empresas (por Empresa).",
+        "functions": ["Restrição de Dados pela Estrutura de Grupo de Empresas"],
+    },
 }
+
+
+def _normalize_access_code(value):
+    c_code = str(value or "").strip()
+    if "." in c_code:
+        try:
+            c_code = str(int(float(c_code)))
+        except (ValueError, OverflowError):
+            pass
+    return c_code
 
 
 class UserMapper:
@@ -520,13 +1018,19 @@ class UserMapper:
 
         result = []
         for row in rows:
-            c_code = str(row.get(code_col) or "").strip()
+            c_code_raw = str(row.get(code_col) or "").strip()
+            if not c_code_raw:
+                continue
+            c_code = _normalize_access_code(c_code_raw)
             if not c_code:
                 continue
+            code_info = USER_ACCESS_CODES.get(c_code, {})
             result.append({
                 "code": c_code,
                 "enabled": str(row.get(enabled_col) or "T").strip().upper() == "T" if enabled_col else True,
-                "description": USER_ACCESS_CODE_DESCRIPTIONS.get(c_code, ""),
+                "name": code_info.get("name", ""),
+                "description": code_info.get("description", ""),
+                "functions": code_info.get("functions", []),
             })
 
         return sorted(result, key=lambda item: item["code"])

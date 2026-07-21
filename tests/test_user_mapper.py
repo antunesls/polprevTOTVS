@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch
 
-from src.user_mapper import UserMapper
+from src.user_mapper import UserMapper, _normalize_access_code, USER_ACCESS_CODES
 
 
 class FakeUserMapper(UserMapper):
@@ -268,16 +268,16 @@ class UserMapperAccessMatrixTest(unittest.TestCase):
                 }
             ],
             access_codes=[
-                {"code": "112", "enabled": True, "description": "Gerar rel. no servidor"},
-                {"code": "121", "enabled": True, "description": "Usa impressora no server"},
+                {"code": "112", "enabled": True, "name": "Gerar rel. no servidor", "description": "Permite que o relatório seja gerado no servidor de aplicação (AppServer) em vez de localmente no SmartClient.", "functions": ["Acesso genérico para relatórios"]},
+                {"code": "121", "enabled": True, "name": "Usa impressora no server", "description": "Permite que o usuário utilize as impressoras registradas no servidor de aplicação para a emissão de relatórios.", "functions": ["Acesso genérico para relatórios"]},
             ],
         )
 
         report = mapper.build_full_report("usr001")
 
         self.assertEqual(report["access_codes"], [
-            {"code": "112", "enabled": True, "description": "Gerar rel. no servidor"},
-            {"code": "121", "enabled": True, "description": "Usa impressora no server"},
+            {"code": "112", "enabled": True, "name": "Gerar rel. no servidor", "description": "Permite que o relatório seja gerado no servidor de aplicação (AppServer) em vez de localmente no SmartClient.", "functions": ["Acesso genérico para relatórios"]},
+            {"code": "121", "enabled": True, "name": "Usa impressora no server", "description": "Permite que o usuário utilize as impressoras registradas no servidor de aplicação para a emissão de relatórios.", "functions": ["Acesso genérico para relatórios"]},
         ])
 
     def test_report_suggests_partial_reuse_with_missing_permissions(self):
@@ -418,6 +418,109 @@ class UserMapperAccessMatrixTest(unittest.TestCase):
 
         self.assertEqual(privileges["MATA010"]["Visualizar"]["rule_id"], "A1")
         self.assertEqual(privileges["MATA010"]["Visualizar"]["rule_name"], "P_EXISTENTE")
+
+
+class UserMapperAccessCodeNormalizationTest(unittest.TestCase):
+    def test_normalize_integer_decimal_to_int_string(self):
+        self.assertEqual(_normalize_access_code(101.0), "101")
+        self.assertEqual(_normalize_access_code(198.0), "198")
+
+    def test_normalize_string_decimal_to_int_string(self):
+        self.assertEqual(_normalize_access_code("101.0"), "101")
+        self.assertEqual(_normalize_access_code("198.0"), "198")
+
+    def test_normalize_string_with_fractional_part_drops_decimals(self):
+        self.assertEqual(_normalize_access_code("101.5"), "101")
+
+    def test_normalize_plain_string_passes_through(self):
+        self.assertEqual(_normalize_access_code("112"), "112")
+        self.assertEqual(_normalize_access_code("198"), "198")
+        self.assertEqual(_normalize_access_code("ABC"), "ABC")
+
+    def test_normalize_empty_value_returns_empty_string(self):
+        self.assertEqual(_normalize_access_code(None), "")
+        self.assertEqual(_normalize_access_code(""), "")
+
+    def test_normalize_whitespace_value_returns_empty_string(self):
+        self.assertEqual(_normalize_access_code("  "), "")
+
+    def test_user_access_codes_has_rich_structure_for_known_code(self):
+        self.assertIn("101", USER_ACCESS_CODES)
+        self.assertEqual(USER_ACCESS_CODES["101"]["name"], "Imprime param. relatórios")
+        self.assertIsInstance(USER_ACCESS_CODES["101"]["functions"], list)
+        self.assertGreater(len(USER_ACCESS_CODES["101"]["functions"]), 0)
+
+    def test_user_access_codes_covers_up_to_198(self):
+        self.assertIn("198", USER_ACCESS_CODES)
+        self.assertEqual(USER_ACCESS_CODES["198"]["name"], "Filtro - Visualiza outras Empresas")
+        self.assertIn("Empresa", USER_ACCESS_CODES["198"]["description"])
+
+    def test_report_with_unknown_access_code_returns_empty_metadata(self):
+        mapper = FakeUserMapper(
+            menu_tree=[
+                {
+                    "menu_name": "SIGACOM",
+                    "module": "COM",
+                    "items": [
+                        {"item_id": "1", "father_id": "", "function_code": "MATA010", "description": "Produtos", "browse_features": {}},
+                    ],
+                }
+            ],
+            access_codes=[
+                {"code": "999", "enabled": True, "name": "", "description": "", "functions": []},
+            ],
+        )
+
+        report = mapper.build_full_report("usr001")
+
+        self.assertEqual(report["access_codes"], [
+            {"code": "999", "enabled": True, "name": "", "description": "", "functions": []},
+        ])
+
+    def test_report_with_code_198_returns_rich_metadata(self):
+        mapper = FakeUserMapper(
+            menu_tree=[
+                {
+                    "menu_name": "SIGACOM",
+                    "module": "COM",
+                    "items": [
+                        {"item_id": "1", "father_id": "", "function_code": "MATA010", "description": "Produtos", "browse_features": {}},
+                    ],
+                }
+            ],
+            access_codes=[
+                {"code": "198", "enabled": True, "name": "Filtro - Visualiza outras Empresas", "description": "O usuário que possuir esse acesso não terá Restrição de Dados pela Estrutura de Grupo de Empresas (por Empresa).", "functions": ["Restrição de Dados pela Estrutura de Grupo de Empresas"]},
+            ],
+        )
+
+        report = mapper.build_full_report("usr001")
+
+        self.assertEqual(report["access_codes"], [
+            {"code": "198", "enabled": True, "name": "Filtro - Visualiza outras Empresas", "description": "O usuário que possuir esse acesso não terá Restrição de Dados pela Estrutura de Grupo de Empresas (por Empresa).", "functions": ["Restrição de Dados pela Estrutura de Grupo de Empresas"]},
+        ])
+
+    def test_report_with_all_access_codes_populated(self):
+        mapper = FakeUserMapper(
+            menu_tree=[
+                {
+                    "menu_name": "SIGACOM",
+                    "module": "COM",
+                    "items": [
+                        {"item_id": "1", "father_id": "", "function_code": "MATA010", "description": "Produtos", "browse_features": {}},
+                    ],
+                }
+            ],
+            access_codes=[
+                {"code": "101", "enabled": True, "name": "Imprime param. relatórios", "description": "Define se os parâmetros utilizados na emissão do relatório serão impressos.", "functions": ["Acesso genérico para relatórios"]},
+                {"code": "192", "enabled": True, "name": "Acesso a Dados Pessoais", "description": "O usuário que tiver esse Acesso terá permissão para visualizar relatórios/rotinas com dados pessoais.", "functions": ["LGPD - Dados Pessoais"]},
+            ],
+        )
+
+        report = mapper.build_full_report("usr001")
+
+        self.assertEqual(len(report["access_codes"]), 2)
+        self.assertEqual(report["access_codes"][0]["name"], "Imprime param. relatórios")
+        self.assertEqual(report["access_codes"][1]["name"], "Acesso a Dados Pessoais")
 
 
 if __name__ == "__main__":
