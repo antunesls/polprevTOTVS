@@ -66,13 +66,13 @@ class Tier3FunctionalSetsTest(unittest.TestCase):
         self.assertEqual(result[0]["routines"], ["ETQ001", "ETQ002"])
         self.assertEqual(result[0]["users"], ["joao"])
 
-    def test_tier3_users_must_cover_every_required_item(self):
+    def test_tier3_discards_cluster_with_no_user_covering_all_items(self):
         result = normalize_tier3_sets(
             [{"name": "P_CJ_MISTO", "routines": ["ETQ002", "WMS020"]}],
             self.reports,
         )
 
-        self.assertEqual(result[0]["users"], [])
+        self.assertEqual(result, [])
 
     def test_discards_routines_with_required_permissions_that_no_user_covers(self):
         result = normalize_tier3_sets(
@@ -447,6 +447,11 @@ class Tier3FunctionalSetsTest(unittest.TestCase):
                     {"code": "WMS010", "permissions": ["Excluir"]},
                 ],
             },
+            {
+                "name": "P_CJ_MISTO_SEM_USERS",
+                "reason": "Rotinas existem mas usuarios nao cobrem todas",
+                "routines": ["ETQ002", "WMS020"],
+            },
         ]
 
         output = StringIO()
@@ -457,6 +462,7 @@ class Tier3FunctionalSetsTest(unittest.TestCase):
         self.assertIn("[DESCARTADO] P_CJ_EXPEDICAO: baseado em departamento", text)
         self.assertIn("[DESCARTADO] P_CJ_SEM_PERMISSAO", text)
         self.assertIn("permissoes nao cobertas", text)
+        self.assertIn("[DESCARTADO] P_CJ_MISTO_SEM_USERS: nenhuma rotina/permissao amarra usuarios ao conjunto", text)
 
 
 class ExistingRulesTest(unittest.TestCase):
@@ -710,6 +716,29 @@ class Tier3PromptTest(unittest.TestCase):
 
         self.assertNotIn("Catalogo filtrado", prompt)
         self.assertIn("MATA040", prompt)
+
+    def test_prompt_includes_prefix_domain_hints(self):
+        from src.llm_categorizer import build_prompt
+
+        prompt = build_prompt([
+            {"user": "joao", "routines": [
+                {"code": "FINR355", "description": "Relatorio financeiro"},
+                {"code": "MATR010", "description": "Relatorio de materiais"},
+            ]},
+            {"user": "maria", "routines": [
+                {"code": "FINR355", "description": "Relatorio financeiro"},
+            ]},
+        ], min_users=1)
+
+        self.assertIn("DICA DE CLASSIFICACAO POR PREFIXO", prompt)
+        self.assertIn("FINR", prompt)
+        self.assertIn("MATR", prompt)
+        self.assertIn("FISR", prompt)
+        self.assertIn("CTBR", prompt)
+        self.assertIn("relatorios financeiros", prompt)
+        self.assertIn("relatorios de materiais", prompt)
+        self.assertIn("relatorios fiscais", prompt)
+        self.assertIn("relatorios contabeis", prompt)
 
 
 class DepartmentCanonicalizationTest(unittest.TestCase):

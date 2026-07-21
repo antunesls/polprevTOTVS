@@ -413,6 +413,10 @@ def normalize_tier3_sets(raw_sets, reports):
             ):
                 users.append(login)
 
+        if not users:
+            print(f"    [DESCARTADO] {name}: nenhuma rotina/permissao amarra usuarios ao conjunto")
+            continue
+
         normalized.append({
             "name": name,
             "reason": item.get("reason", ""),

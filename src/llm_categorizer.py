@@ -90,6 +90,15 @@ Cada rotina e um codigo como MATA010, FINA020, COMSV001, etc.
 Sua tarefa: montar CONJUNTOS FUNCIONAIS DE ROTINAS relacionadas entre si.
 Este e o TERCEIRO NIVEL da camada organizacional: pacotes reutilizaveis de rotinas por dominio funcional.
 
+DICA DE CLASSIFICACAO POR PREFIXO:
+O prefixo da rotina (primeiros 4 caracteres) indica dominio funcional e modulo. Use isso como forte evidencia ao agrupar rotinas, especialmente quando a descricao for curta ou generica.
+- Prefixos terminados em "R" geralmente indicam RELATORIOS (ex: FINR = relatorios financeiros, MATR = relatorios de materiais/compras/estoque, FISR = relatorios fiscais, CTBR = relatorios contabeis).
+- Prefixos terminados em "A" geralmente indicam CADASTROS (ex: MATA = cadastros de materiais, FINA = cadastros financeiros).
+- Prefixos terminados em "C" geralmente indicam CONSULTAS (ex: MATC = consultas de materiais).
+- Prefixos terminados em "M" geralmente indicam MOVIMENTACOES (ex: MATM = movimentacoes de materiais).
+- Prefixos terminados em "E" geralmente indicam ENTRADAS.
+Rotinas com o mesmo prefixo pertencem ao mesmo modulo e tem alta afinidade funcional entre si.
+
 REGRAS:
 1. Priorize o assunto/objetivo da rotina e sua descricao. A quantidade de usuarios e apenas evidencia auxiliar, nao o criterio principal.
 2. Para cada conjunto, sugira um nome no formato P_CJ_{{ROTULO}} baseado no DOMINIO FUNCIONAL das rotinas.

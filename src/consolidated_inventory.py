@@ -69,16 +69,30 @@ def build_consolidated_inventory(
     rule_name_to_id = rule_name_to_id or {}
 
     user_id_to_login = {}
+    valid_logins = set()
     for rep in reports or []:
         uid = str(rep.get("user_id") or rep.get("user") or "").strip()
         login = str(rep.get("user") or "").strip()
         if uid and login:
             user_id_to_login[uid] = login
+        if login:
+            valid_logins.add(login)
 
     rules = []
 
+    orphaned_bindings = {}
+
     for rule_name, routine_map in sorted((existing_rules or {}).items()):
         links = existing_links.get(rule_name, {})
+        raw_linked_users = links.get("linked_users", []) or []
+        filtered_users = []
+        for u in raw_linked_users:
+            user_login = str(u.get("login", "") or "").strip()
+            if user_login in valid_logins:
+                filtered_users.append(u)
+            else:
+                orphaned_bindings.setdefault(rule_name, []).append(user_login or str(u.get("user_id", "")))
+
         routines_out = []
         for routine_code_name in sorted(routine_map.keys()):
             features_out = _merge_feature_list(None, None)
@@ -111,7 +125,7 @@ def build_consolidated_inventory(
                 for rt in routines_out
                 for f in (rt.get("features") or [])
             ),
-            "users": sorted(links.get("linked_users", []) or [], key=lambda u: str(u.get("login", ""))),
+            "users": sorted(filtered_users, key=lambda u: str(u.get("login", ""))),
             "groups": sorted(links.get("linked_groups", []) or [], key=lambda g: str(g.get("group_name", ""))),
             "routines": routines_out,
         })
@@ -244,6 +258,9 @@ def build_consolidated_inventory(
     for group_name, info in sorted(tier3_routines.items()):
         reused_rule = info.get("reuses_existing_rule")
         members = sorted(info.get("members", []) or [])
+        if not members:
+            continue
+
         routines_in = info.get("routines", []) or []
 
         routines_out = []
@@ -347,7 +364,13 @@ def build_consolidated_inventory(
         str(r.get("tier", "")),
     ))
 
+    if orphaned_bindings:
+        print(f"  [AVISO] Vinculos orfaos ignorados (usuarios nao estao nos relatorios atuais):")
+        for rule_name, users in sorted(orphaned_bindings.items()):
+            print(f"    - {rule_name}: {', '.join(users)}")
+
     return {
         "rules": rules,
         "deleted_bindings": [],
+        "orphaned_bindings": orphaned_bindings,
     }

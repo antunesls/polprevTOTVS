@@ -192,6 +192,64 @@ class ConsolidatedInventoryTest(unittest.TestCase):
         p_cj_novo = next(r for r in result["rules"] if r["rule_name"] == "P_CJ_NOVO")
         self.assertIsNone(p_cj_novo["rule_id"])
 
+    def test_filters_orphaned_users_from_existing_rules(self):
+        orphan_links = {
+            "P_COMPRAS": {
+                "linked_users": [
+                    {"user_id": "U001", "login": "joao"},
+                    {"user_id": "U999", "login": "ORFAO_FULANO"},
+                    {"user_id": "U888", "login": "ORFAO_CICLANO"},
+                ],
+                "linked_groups": [],
+            },
+            "P_CJ_NOVO": {
+                "linked_users": [
+                    {"user_id": "U002", "login": "maria"},
+                ],
+                "linked_groups": [],
+            },
+        }
+        result = build_consolidated_inventory(
+            self._reports(), self.existing_rules, orphan_links,
+            self.tier1_routines, self.tier2_routines, self.tier3_routines, self.tier4_routines,
+        )
+
+        p_compras = next(r for r in result["rules"] if r["rule_name"] == "P_COMPRAS")
+        user_logins = [u["login"] for u in p_compras["users"]]
+        self.assertIn("joao", user_logins)
+        self.assertNotIn("ORFAO_FULANO", user_logins)
+        self.assertNotIn("ORFAO_CICLANO", user_logins)
+
+        orphaned = result.get("orphaned_bindings", {})
+        self.assertIn("P_COMPRAS", orphaned)
+        self.assertIn("ORFAO_FULANO", orphaned["P_COMPRAS"])
+        self.assertIn("ORFAO_CICLANO", orphaned["P_COMPRAS"])
+
+    def test_orphaned_bindings_logged_when_present(self):
+        from io import StringIO
+        from contextlib import redirect_stdout
+
+        orphan_links = {
+            "P_COMPRAS": {
+                "linked_users": [
+                    {"user_id": "U001", "login": "joao"},
+                    {"user_id": "U999", "login": "ORFAO_FULANO"},
+                ],
+                "linked_groups": [],
+            },
+        }
+
+        output = StringIO()
+        with redirect_stdout(output):
+            build_consolidated_inventory(
+                self._reports(), self.existing_rules, orphan_links,
+                self.tier1_routines, self.tier2_routines, self.tier3_routines, self.tier4_routines,
+            )
+
+        text = output.getvalue()
+        self.assertIn("[AVISO] Vinculos orfaos ignorados", text)
+        self.assertIn("P_COMPRAS: ORFAO_FULANO", text)
+
 
 if __name__ == "__main__":
     unittest.main()

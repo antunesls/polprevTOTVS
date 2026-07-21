@@ -217,5 +217,170 @@ class SqlProgressOutputTest(unittest.TestCase):
         self.assertIn("SYS_RULES_USR_RULES:", text)
 
 
+class SharedResidualPromotionTest(unittest.TestCase):
+    def setUp(self):
+        self.reports = [
+            {
+                "user": "AGALATTI",
+                "user_depto": "FINANCEIRO",
+                "routines_summary": [
+                    {"routine": "MATA010", "features": {"Visualizar": {"access": "PERMITIDO"}}},
+                    {"routine": "FINR355", "features": {"Visualizar": {"access": "PERMITIDO"}, "Alterar": {"access": "PERMITIDO"}}},
+                    {"routine": "FINR120", "features": {"Visualizar": {"access": "PERMITIDO"}}},
+                    {"routine": "FINR220", "features": {"Visualizar": {"access": "PERMITIDO"}}},
+                    {"routine": "FINR480", "features": {"Visualizar": {"access": "PERMITIDO"}}},
+                ],
+            },
+            {
+                "user": "JDASILVA",
+                "user_depto": "FINANCEIRO",
+                "routines_summary": [
+                    {"routine": "MATA010", "features": {"Visualizar": {"access": "PERMITIDO"}}},
+                    {"routine": "FINR355", "features": {"Visualizar": {"access": "PERMITIDO"}, "Alterar": {"access": "PERMITIDO"}}},
+                    {"routine": "FINR120", "features": {"Visualizar": {"access": "PERMITIDO"}}},
+                    {"routine": "FINR220", "features": {"Visualizar": {"access": "PERMITIDO"}}},
+                    {"routine": "FINR480", "features": {"Visualizar": {"access": "PERMITIDO"}}},
+                ],
+            },
+            {
+                "user": "PTALASSO",
+                "user_depto": "FINANCEIRO",
+                "routines_summary": [
+                    {"routine": "MATA010", "features": {"Visualizar": {"access": "PERMITIDO"}}},
+                    {"routine": "FINR355", "features": {"Visualizar": {"access": "PERMITIDO"}}},
+                    {"routine": "FINR120", "features": {"Visualizar": {"access": "PERMITIDO"}}},
+                    {"routine": "FINR220", "features": {"Visualizar": {"access": "PERMITIDO"}}},
+                ],
+            },
+        ]
+
+    def test_promotes_shared_residuals_to_tier3(self):
+        generator = FakeOrganizationalPrivilegeGenerator(self.reports, SCHEMA, "TESTE", conn=None)
+
+        generator.tier1_routines = {"MATA010"}
+        generator.tier2_routines = {}
+        generator.tier3_routines = {}
+        generator._compute_tier4()
+
+        self.assertIn("AGALATTI", generator.tier4_routines)
+        self.assertIn("FINR355", generator.tier4_routines["AGALATTI"])
+
+        generator._promote_shared_residual_clusters(min_users=2, min_routines=2, user_overlap_threshold=0.70)
+
+        self.assertTrue(any("REL_FINANC" in name for name in generator.tier3_routines))
+        self.assertTrue(any("FINR355" in str(r) for info in generator.tier3_routines.values() for r in info["routines"]))
+
+        for name, info in generator.tier3_routines.items():
+            if "REL_FINANC" in name:
+                self.assertIn("FINR355",
+                    str(info["routines"]))
+                self.assertTrue(len(info["members"]) >= 2)
+                self.assertTrue(len(info["routines"]) >= 2)
+                self.assertIn("AGALATTI", info["members"])
+                self.assertIn("JDASILVA", info["members"])
+                self.assertNotIn("FINR355", info["members"])
+                self.assertNotIn("FINR120", info["members"])
+                self.assertNotIn("FINR220", info["members"])
+
+    def test_promoted_members_are_real_users_not_routines(self):
+        generator = FakeOrganizationalPrivilegeGenerator(self.reports, SCHEMA, "TESTE", conn=None)
+
+        generator.tier1_routines = {"MATA010"}
+        generator.tier2_routines = {}
+        generator.tier3_routines = {}
+        generator._compute_tier4()
+
+        generator._promote_shared_residual_clusters(min_users=2, min_routines=2, user_overlap_threshold=0.70)
+
+        valid_users = {rep["user"] for rep in self.reports}
+        for name, info in generator.tier3_routines.items():
+            for member in info["members"]:
+                self.assertIn(member, valid_users,
+                    f"{name}: '{member}' nao e um usuario valido (pode ser rotina/ID)")
+
+    def test_does_not_promote_single_routine(self):
+        reports = [
+            {
+                "user": "AGALATTI",
+                "user_depto": "FINANCEIRO",
+                "routines_summary": [
+                    {"routine": "MATA010", "features": {"Visualizar": {"access": "PERMITIDO"}}},
+                    {"routine": "FINR355", "features": {"Visualizar": {"access": "PERMITIDO"}}},
+                ],
+            },
+            {
+                "user": "JDASILVA",
+                "user_depto": "FINANCEIRO",
+                "routines_summary": [
+                    {"routine": "MATA010", "features": {"Visualizar": {"access": "PERMITIDO"}}},
+                    {"routine": "FINR355", "features": {"Visualizar": {"access": "PERMITIDO"}}},
+                ],
+            },
+        ]
+
+        generator = FakeOrganizationalPrivilegeGenerator(reports, SCHEMA, "TESTE", conn=None)
+        generator.tier1_routines = {"MATA010"}
+        generator.tier2_routines = {}
+        generator.tier3_routines = {}
+        generator._compute_tier4()
+
+        generator._promote_shared_residual_clusters(min_users=2, min_routines=2, user_overlap_threshold=0.70)
+
+        self.assertEqual(len(generator.tier3_routines), 0)
+        self.assertIn("AGALATTI", generator.tier4_routines)
+
+    def test_promotion_reduces_tier4(self):
+        generator = FakeOrganizationalPrivilegeGenerator(self.reports, SCHEMA, "TESTE", conn=None)
+
+        generator.tier1_routines = {"MATA010"}
+        generator.tier2_routines = {}
+        generator.tier3_routines = {}
+        generator._compute_tier4()
+
+        initial_tier4_count = sum(len(r) for r in generator.tier4_routines.values())
+        self.assertGreater(initial_tier4_count, 0)
+
+        generator._promote_shared_residual_clusters(min_users=2, min_routines=2, user_overlap_threshold=0.70)
+
+        if generator.tier3_routines:
+            final_tier4_count = sum(len(r) for r in generator.tier4_routines.values())
+            self.assertLessEqual(final_tier4_count, initial_tier4_count)
+
+
+class PrefixDomainLabelTest(unittest.TestCase):
+    def test_known_prefixes(self):
+        from src.organizational_privileges import _prefix_domain_label
+
+        self.assertEqual(_prefix_domain_label("FINR"), "REL_FINANC")
+        self.assertEqual(_prefix_domain_label("MATR"), "REL_MAT")
+        self.assertEqual(_prefix_domain_label("FISR"), "REL_FISCAL")
+        self.assertEqual(_prefix_domain_label("CTBR"), "REL_CONTAB")
+
+    def test_generic_r_prefix(self):
+        from src.organizational_privileges import _prefix_domain_label
+
+        self.assertEqual(_prefix_domain_label("ETQR"), "REL_ETQ")
+
+    def test_generic_a_prefix(self):
+        from src.organizational_privileges import _prefix_domain_label
+
+        self.assertEqual(_prefix_domain_label("MATA"), "CAD_MAT")
+
+    def test_generic_c_prefix(self):
+        from src.organizational_privileges import _prefix_domain_label
+
+        self.assertEqual(_prefix_domain_label("MATC"), "CONS_MAT")
+
+    def test_generic_m_prefix(self):
+        from src.organizational_privileges import _prefix_domain_label
+
+        self.assertEqual(_prefix_domain_label("MATM"), "MOV_MAT")
+
+    def test_unknown_prefix_fallback(self):
+        from src.organizational_privileges import _prefix_domain_label
+
+        self.assertEqual(_prefix_domain_label("XYZ1"), "XYZ1")
+
+
 if __name__ == "__main__":
     unittest.main()

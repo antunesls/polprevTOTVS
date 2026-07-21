@@ -29,6 +29,34 @@ MANUAL_NAME_STOPWORDS = {
     "SISTEMA", "GERAL", "CONTROLE", "MANUTENCAO",
 }
 
+PREFIX_DOMAIN_LABELS = {
+    "FINR": "REL_FINANC",
+    "MATR": "REL_MAT",
+    "FISR": "REL_FISCAL",
+    "CTBR": "REL_CONTAB",
+    "FATR": "REL_FAT",
+    "PONR": "REL_PONTO",
+    "ESPR": "REL_ESTOQUE",
+    "CRMR": "REL_CRM",
+    "RSCR": "REL_RECURSOS",
+    "CPLR": "REL_COMPLIANCE",
+}
+
+
+def _prefix_domain_label(prefix):
+    prefix_upper = str(prefix or "").upper()
+    if prefix_upper in PREFIX_DOMAIN_LABELS:
+        return PREFIX_DOMAIN_LABELS[prefix_upper]
+    if len(prefix_upper) >= 4 and prefix_upper[3] == "R":
+        return f"REL_{prefix_upper[:3]}"
+    if len(prefix_upper) >= 4 and prefix_upper[3] == "A":
+        return f"CAD_{prefix_upper[:3]}"
+    if len(prefix_upper) >= 4 and prefix_upper[3] == "C":
+        return f"CONS_{prefix_upper[:3]}"
+    if len(prefix_upper) >= 4 and prefix_upper[3] == "M":
+        return f"MOV_{prefix_upper[:3]}"
+    return prefix_upper[:4]
+
 
 class OrganizationalPrivilegeGenerator:
     def __init__(self, all_reports, schema, empresa_name, conn):
@@ -133,6 +161,9 @@ class OrganizationalPrivilegeGenerator:
 
         print(f"\n  {CY}{B}[TIER 4]{R} Privilegios exclusivos por usuario")
         self._compute_tier4()
+
+        print(f"\n  {CY}{B}[PROMOCAO RESIDUAIS]{R} Rotinas compartilhadas -> TIER3")
+        self._promote_shared_residual_clusters()
 
         print(f"\n  {CY}{B}[GERANDO SQL]{R}")
         self._generate_sql()
@@ -293,7 +324,13 @@ class OrganizationalPrivilegeGenerator:
                     return
 
         for c in llm_clusters:
-            name = (c.get("name") or f"CLUSTER_{idx}").strip().upper()
+            users = c.get("users", [])
+            if not users:
+                name = (c.get("name") or "").strip().upper()
+                print(f"  {Y}Conjunto {name} ignorado: nenhum usuario vinculado{R}")
+                continue
+
+            name = (c.get("name") or "").strip().upper()
             if not name.startswith("P_CJ_") and not name.startswith("P_PF_"):
                 name = f"P_CJ_{name}"
             if len(name) > 20:
@@ -468,6 +505,111 @@ class OrganizationalPrivilegeGenerator:
         if total_exclusive:
             for user, routines in sorted(self.tier4_routines.items()):
                 print(f"  {D}{user}: {len(routines)} rotinas exclusivas{R}")
+
+    def _promote_shared_residual_clusters(self, min_users=2, min_routines=2, user_overlap_threshold=0.70):
+        G = C["green"]; Y = C["yellow"]; R = C["reset"]; D = C["dim"]; B = C["bold"]; CY = C["cyan"]
+
+        if not self.tier4_routines:
+            return
+
+        domain_prefixes = {}
+        for routine in sorted(set().union(*self.tier4_routines.values())):
+            prefix = routine[:4] if not routine or not routine[0].isdigit() else routine[:5]
+            domain_prefixes.setdefault(prefix, []).append(routine)
+
+        promoted_count = 0
+        for prefix, routines in sorted(domain_prefixes.items()):
+            if len(routines) < min_routines:
+                continue
+
+            routine_users = {}
+            for rt in routines:
+                routine_users[rt] = sorted(
+                    user for user, rt_set in self.tier4_routines.items() if rt in rt_set
+                )
+
+            candidates = []
+            for i in range(len(routines)):
+                for j in range(i + 1, len(routines)):
+                    rt_a, rt_b = routines[i], routines[j]
+                    users_a = set(routine_users[rt_a])
+                    users_b = set(routine_users[rt_b])
+                    if len(users_a) < min_users or len(users_b) < min_users:
+                        continue
+                    union_size = len(users_a | users_b)
+                    if union_size == 0:
+                        continue
+                    overlap = len(users_a & users_b) / union_size
+                    if overlap >= user_overlap_threshold:
+                        common_users = users_a & users_b
+                        candidates.append((rt_a, rt_b, sorted(common_users), overlap))
+
+            if not candidates:
+                continue
+
+            promoted_routines = set()
+            promoted_users_map = {}
+            for rt_a, rt_b, common, overlap in sorted(candidates, key=lambda c: (-len(c[2]), -c[3])):
+                if rt_a in promoted_routines and rt_b in promoted_routines:
+                    existing = set()
+                    for u in promoted_users_map.values():
+                        existing |= u
+                    new_common = set(common) - existing
+                    if len(new_common) < min_users:
+                        continue
+
+                promoted_routines.add(rt_a)
+                promoted_routines.add(rt_b)
+                for u in common:
+                    promoted_users_map.setdefault(u, set()).update([rt_a, rt_b])
+
+            if len(promoted_routines) < min_routines:
+                continue
+
+            domain_label = _prefix_domain_label(prefix)
+            name = f"P_CJ_{domain_label}"[:20]
+            counter = 1
+            base_name = name
+            while name in self.tier3_routines:
+                name = f"{base_name[:17]}_{counter:02d}"[:20]
+                counter += 1
+
+            valid_users = {rep["user"] for rep in self.reports}
+
+            all_users = sorted(u for u in promoted_users_map.keys() if u in valid_users)
+            if len(all_users) < min_users:
+                print(f"  {D}Residuais {prefix}: apenas {len(all_users)} usuario(s), ignorado{R}")
+                continue
+
+            routines_out = []
+            for rt in sorted(promoted_routines):
+                perms_union = set()
+                for user in all_users:
+                    for rep in self.reports:
+                        if rep.get("user") == user:
+                            perms_union |= set(routine_permissions(
+                                {"routine": rt, "features": self._routine_features(rep, rt)}
+                            ))
+                            break
+                routines_out.append(
+                    {"code": rt, "permissions": sorted(perms_union)}
+                    if perms_union
+                    else rt
+                )
+
+            self.tier3_routines[name] = {
+                "routines": routines_out,
+                "members": all_users,
+            }
+            print(f"  {G}Promovido {domain_label}: {name} ({len(all_users)} usuarios, {len(promoted_routines)} rotinas){R}")
+            sample = sorted(promoted_routines)[:6]
+            print(f"    {D}Rotinas: {', '.join(sample)}{'...' if len(promoted_routines) > 6 else ''}{R}")
+            promoted_count += 1
+
+        if promoted_count:
+            self.tier4_routines = {}
+            self._compute_tier4()
+            print(f"  {G}{promoted_count} conjuntos promovidos de residuais compartilhados para TIER3{R}")
 
     def _generate_sql(self):
         G = C["green"]; CY = C["cyan"]; R = C["reset"]; D = C["dim"]; B = C["bold"]; Y = C["yellow"]

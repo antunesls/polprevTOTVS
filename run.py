@@ -800,11 +800,19 @@ def _run_org_analysis_with_reports(all_reports):
 
 def _load_existing_links(conn):
     from src.database import fetch_dicts
+    from src.discovery import column_exists
     links = {}
     try:
         usr_rows = fetch_dicts(conn, "SELECT USER_ID, USR_RL_ID FROM SYS_RULES_USR_RULES")
         rul_rows = fetch_dicts(conn, "SELECT RL__ID, RL__CODIGO FROM SYS_RULES")
-        usr_info_rows = fetch_dicts(conn, "SELECT USR_ID, USR_CODIGO FROM SYS_USR")
+        usr_del = column_exists({}, "SYS_USR", ["D_E_L_E_T_"])
+        usr_block = column_exists({}, "SYS_USR", ["USR_MSBLQL"])
+        usr_where = ""
+        if usr_del:
+            usr_where = " WHERE D_E_L_E_T_ = ' '"
+            if usr_block:
+                usr_where += " AND USR_MSBLQL != '1'"
+        usr_info_rows = fetch_dicts(conn, f"SELECT USR_ID, USR_CODIGO FROM SYS_USR{usr_where}")
     except Exception:
         return links
 
