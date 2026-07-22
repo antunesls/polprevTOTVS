@@ -65,6 +65,8 @@ Saidas geradas:
 
 A lista `unused_allowed_routines` indica rotinas com acesso efetivo mapeado, mas sem uso na telemetria, servindo como candidata a descarte na criacao de novas regras. A lista `used_without_effective_access` mostra usuarios que executaram rotinas sem permissao efetiva correspondente no mapeamento, servindo como ponto de auditoria.
 
+Quando `output/metrics_20260722_bosal.json` existir, a criacao de regras e privilegios passa a usar a telemetria como filtro ativo: rotinas sem chamadas na telemetria sao removidas dos scripts de regras (`SYS_RULES_FEATURES` e `SYS_RULES_TRANSACT`) e dos calculos organizacionais de Tiers. O corte padrao e `min_calls = 1`, ou seja, uma rotina precisa ter pelo menos uma chamada registrada para entrar em nova regra.
+
 ---
 
 ## Arquitetura

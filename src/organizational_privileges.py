@@ -58,6 +58,18 @@ def _prefix_domain_label(prefix):
     return prefix_upper[:4]
 
 
+def _load_routine_user_metrics():
+    metrics_path = os.path.join(OUTPUT_DIR, "metrics_20260722_bosal.json")
+    if not os.path.exists(metrics_path):
+        return None
+    try:
+        from src.telemetry_analyzer import load_prometheus_metrics
+        metrics = load_prometheus_metrics(metrics_path)
+        return metrics.get("routine_users", {})
+    except Exception:
+        return None
+
+
 class OrganizationalPrivilegeGenerator:
     def __init__(self, all_reports, schema, empresa_name, conn):
         self.reports = apply_department_canonicalization(all_reports)
@@ -258,7 +270,12 @@ class OrganizationalPrivilegeGenerator:
 
         raw_clusters = llm_result.get("clusters", [])
         print(f"  {D}LLM retornou {len(raw_clusters)} conjuntos brutos{R}")
-        clusters = normalize_tier3_sets(raw_clusters, self.reports)
+
+        routine_user_metrics = _load_routine_user_metrics()
+        clusters = normalize_tier3_sets(raw_clusters, self.reports, routine_user_metrics=routine_user_metrics)
+        if routine_user_metrics:
+            total_assigned = sum(len(c.get("users", [])) for c in clusters)
+            print(f"  {D}Telemetria por usuario ativa: {len(routine_user_metrics)} rotinas com dados de uso{R}")
         print(f"  {D}Validacao local: {len(clusters)} conjuntos aproveitados | {max(len(raw_clusters) - len(clusters), 0)} descartados{R}")
         if not clusters:
             print(f"  {Y}LLM retornou conjuntos, mas todos foram descartados na validacao local. Alternando para modo manual (Jaccard).{R}")

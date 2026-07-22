@@ -132,8 +132,8 @@ class LlmProgressOutputTest(unittest.TestCase):
         text = output.getvalue()
         self.assertIn("Entrada:", text)
         self.assertIn("usuarios | 2 rotinas unicas | >= 2 usuarios: 0 | catalogo enviado: 0", text)
-        self.assertIn("Tentativa 1/2", text)
-        self.assertIn("Tentativa 2/2", text)
+        self.assertIn("Tentativa 1/4", text)
+        self.assertIn("Tentativa 2/4", text)
 
     def test_try_llm_clustering_reports_reason_before_jaccard_when_no_valid_clusters_survive(self):
         reports = [

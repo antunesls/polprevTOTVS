@@ -832,5 +832,82 @@ class DepartmentCanonicalizationTest(unittest.TestCase):
         self.assertNotIn("RH", result)
 
 
+class NormalizeTier3TelemetryFilterTest(unittest.TestCase):
+    def setUp(self):
+        self.reports = [
+            {
+                "user": "joao",
+                "user_name": "Joao",
+                "user_depto": "EXPEDICAO",
+                "routines_summary": [
+                    {"routine": "WMS010", "description": "Separacao"},
+                    {"routine": "WMS020", "description": "Conferencia"},
+                    {"routine": "WMS030", "description": "Embalagem"},
+                ],
+            },
+            {
+                "user": "maria",
+                "user_name": "Maria",
+                "user_depto": "EXPEDICAO",
+                "routines_summary": [
+                    {"routine": "WMS010", "description": "Separacao"},
+                    {"routine": "WMS020", "description": "Conferencia"},
+                    {"routine": "WMS030", "description": "Embalagem"},
+                ],
+            },
+        ]
+        self.raw_sets = [
+            {
+                "name": "P_CJ_WMS",
+                "reason": "Rotinas de WMS",
+                "routines": ["WMS010", "WMS020", "WMS030"],
+            }
+        ]
+
+    def test_user_with_telemetry_for_one_routine_is_included(self):
+        metrics = {
+            "WMS010": {"JOAO": {"calls": 3}},
+            "WMS020": {},
+            "WMS030": {},
+        }
+
+        result = normalize_tier3_sets(self.raw_sets, self.reports, routine_user_metrics=metrics)
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["name"], "P_CJ_WMS")
+        self.assertIn("joao", result[0]["users"])
+
+    def test_user_with_zero_telemetry_is_excluded(self):
+        metrics = {
+            "WMS010": {},
+            "WMS020": {},
+            "WMS030": {},
+        }
+
+        result = normalize_tier3_sets(self.raw_sets, self.reports, routine_user_metrics=metrics)
+
+        self.assertEqual(result, [])
+
+    def test_user_with_telemetry_in_other_user_but_not_self_is_excluded(self):
+        metrics = {
+            "WMS010": {"MARIA": {"calls": 5}},
+            "WMS020": {},
+            "WMS030": {},
+        }
+
+        result = normalize_tier3_sets(self.raw_sets, self.reports, routine_user_metrics=metrics)
+
+        self.assertEqual(len(result), 1)
+        self.assertIn("maria", result[0]["users"])
+        self.assertNotIn("joao", result[0]["users"])
+
+    def test_without_telemetry_metrics_behavior_unchanged(self):
+        result = normalize_tier3_sets(self.raw_sets, self.reports)
+
+        self.assertEqual(len(result), 1)
+        self.assertIn("joao", result[0]["users"])
+        self.assertIn("maria", result[0]["users"])
+
+
 if __name__ == "__main__":
     unittest.main()

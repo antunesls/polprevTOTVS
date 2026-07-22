@@ -235,6 +235,46 @@ def run_telemetry_analysis():
         fail(str(e))
 
 
+def _default_telemetry_metrics_path():
+    return os.path.join(OUTPUT_DIR, "metrics_20260722_bosal.json")
+
+
+_cached_routine_user_metrics = None
+
+def _load_routine_user_metrics():
+    global _cached_routine_user_metrics
+    if _cached_routine_user_metrics is not None:
+        return _cached_routine_user_metrics
+    metrics_path = _default_telemetry_metrics_path()
+    if not os.path.exists(metrics_path):
+        _cached_routine_user_metrics = False
+        return None
+    try:
+        from src.telemetry_analyzer import load_prometheus_metrics
+        metrics = load_prometheus_metrics(metrics_path)
+        _cached_routine_user_metrics = metrics.get("routine_users", {}) or {}
+        return _cached_routine_user_metrics
+    except Exception:
+        _cached_routine_user_metrics = False
+        return None
+
+
+def _apply_telemetry_filter_for_rules(reports, min_calls=1, metrics=None):
+    metrics_path = _default_telemetry_metrics_path()
+    if metrics is None and not os.path.exists(metrics_path):
+        return reports
+    try:
+        from src.telemetry_analyzer import filter_reports_by_telemetry
+        filtered_reports, summary = filter_reports_by_telemetry(reports, metrics_path=metrics_path if metrics is None else None, metrics=metrics, min_calls=min_calls)
+        removed = summary.get("removed_routines", 0)
+        print(f"  {C['yellow']}[TELEMETRIA]{C['reset']} Filtro ativo: {removed} rotina(s) sem uso removida(s) das regras.")
+        info(f"Arquivo: {metrics_path} | Corte minimo: {min_calls} chamada(s)")
+        return filtered_reports
+    except Exception as e:
+        warn(f"Nao foi possivel aplicar filtro de telemetria: {e}")
+        return reports
+
+
 def show_offline_banner():
     D = C["dim"]; R = C["reset"]; G = C["green"]
     print(f"  {D}─── {G}MODO OFFLINE{D} ─── Dados carregados do export.json ───{R}")
@@ -727,6 +767,7 @@ def _run_org_analysis_with_reports(all_reports):
     G = C["green"]; CY = C["cyan"]; D = C["dim"]; B = C["bold"]; Y = C["yellow"]; R = C["reset"]
 
     all_reports = _filter_ignored_group_users(all_reports)
+    all_reports = _apply_telemetry_filter_for_rules(all_reports)
 
     zero_routine_users = []
     filtered_reports = []
@@ -813,7 +854,7 @@ def _run_org_analysis_with_reports(all_reports):
         from src.llm_categorizer import suggest_clusters
         llm_result = suggest_clusters(users_data)
         if llm_result and llm_result.get("clusters"):
-            tier3_clusters.extend(normalize_tier3_sets(llm_result.get("clusters", []), all_reports))
+            tier3_clusters.extend(normalize_tier3_sets(llm_result.get("clusters", []), all_reports, routine_user_metrics=_load_routine_user_metrics()))
         else:
             warn("LLM nao retornou conjuntos funcionais validos.")
     else:
@@ -1091,6 +1132,7 @@ def run_scoped_admin(scope_type, scope_value, mapper=None, schema=None, conn=Non
                 return None
 
             all_reports = _filter_ignored_group_users(all_reports)
+            all_reports = _apply_telemetry_filter_for_rules(all_reports)
 
             if not all_reports:
                 error("Todos os usuarios do departamento foram ignorados pelo filtro de grupo. Abortando.")
@@ -1499,15 +1541,18 @@ def run_generate_privileges(report, schema, login, rule_name=None):
         if not rule_name:
             rule_name = default_rule
 
-    generator = PrivilegeGenerator(report, schema)
+    filtered_reports = _apply_telemetry_filter_for_rules([report])
+    report_for_sql = filtered_reports[0] if filtered_reports else report
+
+    generator = PrivilegeGenerator(report_for_sql, schema)
     sql = generator.generate_sql(rule_name)
     sql_path = generator.save_sql(sql, f"{login}_privileges.sql")
 
     ok()
     success(f"Script SQL salvo em: {C['bold']}{sql_path}{C['reset']}")
 
-    routines_count = len(report.get("routines_summary", []))
-    routines_with_priv = sum(1 for r in report.get("routines_summary", []) if r.get("has_explicit_privilege"))
+    routines_count = len(report_for_sql.get("routines_summary", []))
+    routines_with_priv = sum(1 for r in report_for_sql.get("routines_summary", []) if r.get("has_explicit_privilege"))
 
     print()
     print(f"  {C['cyan']}{'─' * 45}{C['reset']}")
@@ -1592,6 +1637,10 @@ def run_batch(choice=None, gen_priv=False, rule_name="", gen_dash=False, gen_men
             fail_count = 0
             total = len(users)
             all_reports = []
+            telemetry_metrics = None
+            if gen_priv and os.path.exists(_default_telemetry_metrics_path()):
+                from src.telemetry_analyzer import load_prometheus_metrics
+                telemetry_metrics = load_prometheus_metrics(_default_telemetry_metrics_path())
 
             print(f"\n  {C['cyan']}{chr(0x250C)}{'─' * 45}{chr(0x2510)}{C['reset']}")
 
@@ -1615,7 +1664,9 @@ def run_batch(choice=None, gen_priv=False, rule_name="", gen_dash=False, gen_men
 
                     if gen_priv:
                         default_rule = rule_name if rule_name else f"ACESSOS_{login.upper()[:8]}"
-                        generator = PrivilegeGenerator(report, schema)
+                        filtered_reports = _apply_telemetry_filter_for_rules([report], metrics=telemetry_metrics)
+                        report_for_sql = filtered_reports[0] if filtered_reports else report
+                        generator = PrivilegeGenerator(report_for_sql, schema)
                         sql = generator.generate_sql(default_rule)
                         sql_path = generator.save_sql(sql, f"{login}_privileges.sql")
                         info(f"  Script SQL: {sql_path}")
@@ -2371,6 +2422,7 @@ def run_llm_preview():
                 return
 
             all_reports = _filter_ignored_group_users(all_reports)
+            all_reports = _apply_telemetry_filter_for_rules(all_reports)
 
             zero_routine_users = []
             filtered_reports = []
@@ -2413,7 +2465,7 @@ def run_llm_preview():
                 warn("LLM nao retornou conjuntos funcionais validos. Use opcao 2 para modo manual (Jaccard).")
                 return
 
-            llm_clusters = normalize_tier3_sets(llm_result.get("clusters", []), all_reports)
+            llm_clusters = normalize_tier3_sets(llm_result.get("clusters", []), all_reports, routine_user_metrics=_load_routine_user_metrics())
             clustered_users = set()
             for c in llm_clusters:
                 clustered_users.update(c.get("users", []))
@@ -2516,13 +2568,13 @@ def run_llm_preview():
                 if not llm_clusters:
                     warn("Arquivo JSON nao contem conjuntos funcionais do Tier 3. Abortando.")
                     return
-                llm_clusters = normalize_tier3_sets(llm_clusters, all_reports)
+                llm_clusters = normalize_tier3_sets(llm_clusters, all_reports, routine_user_metrics=_load_routine_user_metrics())
                 ok(f"{len(llm_clusters)} conjuntos funcionais carregados de {json_path}")
             else:
                 warn("Opcao invalida. Conjuntos funcionais descartados.")
                 return
 
-            llm_clusters = normalize_tier3_sets(llm_clusters, all_reports)
+            llm_clusters = normalize_tier3_sets(llm_clusters, all_reports, routine_user_metrics=_load_routine_user_metrics())
 
             G = C["green"]; CY = C["cyan"]; Y = C["yellow"]; R = C["reset"]; D = C["dim"]; B = C["bold"]
             print()
@@ -2728,6 +2780,7 @@ def run_organizational_analysis():
         return
 
     all_reports = _filter_ignored_group_users(all_reports)
+    all_reports = _apply_telemetry_filter_for_rules(all_reports)
 
     zero_routine_users = []
     filtered_reports = []
@@ -2826,7 +2879,7 @@ def run_organizational_analysis():
         from src.llm_categorizer import suggest_clusters
         llm_result = suggest_clusters(users_data)
         if llm_result and llm_result.get("clusters"):
-            tier3_clusters.extend(normalize_tier3_sets(llm_result.get("clusters", []), all_reports))
+            tier3_clusters.extend(normalize_tier3_sets(llm_result.get("clusters", []), all_reports, routine_user_metrics=_load_routine_user_metrics()))
         else:
             warn("LLM nao retornou conjuntos funcionais validos.")
     else:
@@ -2933,13 +2986,14 @@ def run_generate_org_sql():
                 return
 
             all_reports = _filter_ignored_group_users(all_reports)
+            all_reports = _apply_telemetry_filter_for_rules(all_reports)
 
             zero_routine_users = [rep["user"] for rep in all_reports if len(rep.get("routines_summary", [])) == 0]
             all_reports = [rep for rep in all_reports if len(rep.get("routines_summary", [])) > 0]
             if zero_routine_users:
                 print(f"  {C['yellow']}[FILTRO]{C['reset']} {len(zero_routine_users)} usuarios sem rotinas ignorados.")
 
-            tier3_clusters = normalize_tier3_sets(tier3_clusters, all_reports)
+            tier3_clusters = normalize_tier3_sets(tier3_clusters, all_reports, routine_user_metrics=_load_routine_user_metrics())
 
             from src.organizational_privileges import OrganizationalPrivilegeGenerator
             gen = OrganizationalPrivilegeGenerator(all_reports, schema, cfg.EMPRESA_NAME, conn)
@@ -3019,6 +3073,7 @@ def run_batch_organizational(choice):
                 return
 
             all_reports = _filter_ignored_group_users(all_reports)
+            all_reports = _apply_telemetry_filter_for_rules(all_reports)
 
             zero_routine_users = []
             filtered_reports = []
@@ -3037,7 +3092,7 @@ def run_batch_organizational(choice):
             print(f"\n  {C['cyan']}{chr(0x2502)}{C['reset']} {C['bold']}Analisando camadas organizacionais...{C['reset']}")
 
             if _saved_llm_clusters is not None:
-                _saved_llm_clusters = normalize_tier3_sets(_saved_llm_clusters, all_reports)
+                _saved_llm_clusters = normalize_tier3_sets(_saved_llm_clusters, all_reports, routine_user_metrics=_load_routine_user_metrics())
 
             gen = OrganizationalPrivilegeGenerator(all_reports, schema, cfg.EMPRESA_NAME, conn)
             gen.generate_interactive(llm_clusters=_saved_llm_clusters)

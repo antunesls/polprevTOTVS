@@ -88,6 +88,65 @@ def load_prometheus_metrics(metrics_path):
     }
 
 
+def routine_call_counts(metrics):
+    counts = defaultdict(int)
+    for routine, item in (metrics or {}).get("routine_totals", {}).items():
+        counts[normalize_routine_code(routine)] += _int_calls(item.get("calls"))
+    for routine, users in (metrics or {}).get("routine_users", {}).items():
+        routine_code = normalize_routine_code(routine)
+        if counts.get(routine_code, 0) > 0:
+            continue
+        counts[routine_code] += sum(_int_calls(user_info.get("calls")) for user_info in (users or {}).values())
+    return dict(counts)
+
+
+def filter_reports_by_telemetry(reports, metrics_path=None, metrics=None, min_calls=1):
+    if metrics is None and metrics_path:
+        metrics = load_prometheus_metrics(metrics_path)
+    if metrics is None:
+        return list(reports or []), {
+            "enabled": False,
+            "min_calls": int(min_calls),
+            "reports": len(reports or []),
+            "removed_routines": 0,
+        }
+
+    calls_by_routine = routine_call_counts(metrics)
+    filtered_reports = []
+    removed_total = 0
+
+    for original_report in reports or []:
+        kept = []
+        removed = []
+        for routine_info in original_report.get("routines_summary", []) or []:
+            routine = normalize_routine_code(routine_info.get("routine"))
+            calls = calls_by_routine.get(routine, 0)
+            routine_copy = dict(routine_info)
+            if calls >= int(min_calls):
+                routine_copy["telemetry_calls"] = calls
+                kept.append(routine_copy)
+            else:
+                removed.append(routine)
+        filtered_report = {key: value for key, value in original_report.items() if key != "routines_summary"}
+        filtered_report["routines_summary"] = kept
+        filtered_report["total_routines"] = len(kept)
+        filtered_report["_telemetry_filter"] = {
+            "enabled": True,
+            "min_calls": int(min_calls),
+            "removed_count": len(removed),
+            "removed_routines": removed,
+        }
+        removed_total += len(removed)
+        filtered_reports.append(filtered_report)
+
+    return filtered_reports, {
+        "enabled": True,
+        "min_calls": int(min_calls),
+        "reports": len(filtered_reports),
+        "removed_routines": removed_total,
+    }
+
+
 def _allowed_access_value(value):
     return str(value or "").strip().upper() in ("PERMITIDO", "SEM_REGRA")
 

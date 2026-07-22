@@ -362,7 +362,21 @@ def _is_department_based(item, normalized_name, department_labels):
     return False
 
 
-def normalize_tier3_sets(raw_sets, reports):
+def _user_has_any_telemetry(login, routines, routine_user_metrics):
+    if routine_user_metrics is None:
+        return True
+    login_upper = str(login or "").strip().upper()
+    for routine_code_value in routines:
+        routine_key = str(routine_code_value or "").strip().upper()
+        users_for_routine = routine_user_metrics.get(routine_key, {})
+        user_info = users_for_routine.get(login_upper, {})
+        calls = user_info.get("calls", 0) if isinstance(user_info, dict) else 0
+        if calls > 0:
+            return True
+    return False
+
+
+def normalize_tier3_sets(raw_sets, reports, routine_user_metrics=None):
     user_routines = _routine_sets_by_user(reports)
     user_permissions = _routine_permissions_by_user(reports)
     department_labels = _department_labels(reports)
@@ -410,7 +424,7 @@ def normalize_tier3_sets(raw_sets, reports):
                     item if isinstance(item, dict) else {"code": item, "permissions": []},
                 )
                 for item in routine_items
-            ):
+            ) and _user_has_any_telemetry(login, routines, routine_user_metrics):
                 users.append(login)
 
         if not users:

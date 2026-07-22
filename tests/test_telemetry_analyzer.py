@@ -5,6 +5,7 @@ from pathlib import Path
 
 from src.telemetry_analyzer import (
     analyze_telemetry,
+    filter_reports_by_telemetry,
     load_prometheus_metrics,
     normalize_routine_code,
 )
@@ -75,6 +76,43 @@ protheus_routine_user_calls_total{module="COM",routine="MATA999()",user="MARIA",
         self.assertEqual(result["used_without_effective_access"][0]["routine"], "MATA999")
         self.assertEqual(result["used_without_effective_access"][0]["user"], "MARIA")
         self.assertEqual(saved["summary"], result["summary"])
+
+    def test_filters_reports_by_telemetry_before_rule_generation(self):
+        reports = [
+            {
+                "user": "JOAO",
+                "routines_summary": [
+                    {"routine": "MATA103", "description": "Usada"},
+                    {"routine": "MATA010", "description": "Sem uso"},
+                ],
+            }
+        ]
+        metrics = {
+            "routine_totals": {
+                "MATA103": {"routine": "MATA103", "calls": 3},
+                "MATA010": {"routine": "MATA010", "calls": 0},
+            },
+            "routine_users": {},
+        }
+
+        filtered, summary = filter_reports_by_telemetry(reports, metrics=metrics, min_calls=1)
+
+        self.assertEqual([r["routine"] for r in filtered[0]["routines_summary"]], ["MATA103"])
+        self.assertEqual(summary["removed_routines"], 1)
+        self.assertEqual(filtered[0]["_telemetry_filter"]["removed_routines"], ["MATA010"])
+        self.assertEqual(reports[0]["routines_summary"][1]["routine"], "MATA010")
+
+    def test_filter_keeps_routine_when_user_metric_exists_even_without_aggregate_metric(self):
+        reports = [{"user": "MARIA", "routines_summary": [{"routine": "FINA050"}]}]
+        metrics = {
+            "routine_totals": {},
+            "routine_users": {"FINA050": {"MARIA": {"calls": 2}}},
+        }
+
+        filtered, summary = filter_reports_by_telemetry(reports, metrics=metrics, min_calls=1)
+
+        self.assertEqual(filtered[0]["routines_summary"][0]["routine"], "FINA050")
+        self.assertEqual(summary["removed_routines"], 0)
 
 
 if __name__ == "__main__":

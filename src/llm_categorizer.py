@@ -365,7 +365,7 @@ def suggest_clusters(users_data):
 
     response_text = None
     result = None
-    attempt_limits = (MAX_PROMPT_ROUTINES, RETRY_PROMPT_ROUTINES)
+    attempt_limits = (MAX_PROMPT_ROUTINES, MAX_PROMPT_ROUTINES, MAX_PROMPT_ROUTINES, RETRY_PROMPT_ROUTINES)
     for attempt_idx, prompt_limit in enumerate(attempt_limits, 1):
         sent = filtered_routine_count if prompt_limit is None else min(prompt_limit, filtered_routine_count)
         print(f"  {D}Entrada: {len(users_data)} usuarios | {len(unique_routines)} rotinas unicas | >= {min_users} usuarios: {filtered_routine_count} | catalogo enviado: {sent}{R}")
@@ -373,25 +373,37 @@ def suggest_clusters(users_data):
         prompt = build_prompt(users_data, max_routines=prompt_limit, min_users=min_users)
         response_text = call_openrouter(prompt)
 
+        is_last = (attempt_idx == len(attempt_limits))
+        is_reduced_next = (attempt_idx < len(attempt_limits) and attempt_limits[attempt_idx] is not None and (attempt_limits[attempt_idx - 1] is None or attempt_limits[attempt_idx] < attempt_limits[attempt_idx - 1]))
+
         if not response_text:
-            if attempt_idx == 2:
+            if is_last:
                 return None
-            print(f"  {Y}LLM nao retornou resposta. Tentando novamente com catalogo reduzido...{R}")
+            if is_reduced_next:
+                print(f"  {Y}LLM nao retornou resposta. Tentando novamente com catalogo reduzido...{R}")
+            else:
+                print(f"  {Y}LLM nao retornou resposta. Tentando novamente...{R}")
             continue
 
         if not response_text.strip().endswith("}"):
             print(f"  {Y}AVISO: Resposta da LLM parece truncada (nao termina com '}}').{R}")
             print(f"  {Y}       Isso ocorre quando max_tokens e insuficiente para tantos usuarios.{R}")
             print(f"  {D}Resposta (ultimos 200 chars): ...{response_text.strip()[-200:]}{R}")
-            if attempt_idx == 1:
-                print(f"  {Y}Tentando novamente com catalogo reduzido ({RETRY_PROMPT_ROUTINES} rotinas)...{R}")
+            if not is_last:
+                if is_reduced_next:
+                    print(f"  {Y}Tentando novamente com catalogo reduzido ({RETRY_PROMPT_ROUTINES} rotinas)...{R}")
+                else:
+                    print(f"  {Y}Tentando novamente...{R}")
                 continue
 
         result = extract_json(response_text)
         if result:
             break
-        if attempt_idx == 1:
-            print(f"  {Y}LLM retornou JSON invalido. Tentando novamente com catalogo reduzido...{R}")
+        if not is_last:
+            if is_reduced_next:
+                print(f"  {Y}LLM retornou JSON invalido. Tentando novamente com catalogo reduzido...{R}")
+            else:
+                print(f"  {Y}LLM retornou JSON invalido. Tentando novamente...{R}")
 
     if not result:
         print(f"  {Y}LLM retornou formato JSON invalido.{R}")
