@@ -201,6 +201,40 @@ def run_clean_privileges():
     info(f"  2. Execute {cfg.EMPRESA_NAME}_organizacional.sql")
 
 
+def run_telemetry_analysis():
+    section("ANALISE DE TELEMETRIA")
+    default_metrics = os.path.join(OUTPUT_DIR, "metrics_20260722_bosal.json")
+    default_export = os.path.join(OUTPUT_DIR, "JSON_F52E2B61-18A1-11d1-B105-00805F49916B1_BOSAL_3.json")
+
+    metrics_path = input(f"  Arquivo de telemetria [{default_metrics}]: ").strip() or default_metrics
+    export_path = input(f"  Arquivo de usuarios/acessos [{default_export}]: ").strip() or default_export
+
+    if not os.path.exists(metrics_path):
+        error(f"Arquivo de telemetria nao encontrado: {metrics_path}")
+        return
+    if not os.path.exists(export_path):
+        error(f"Arquivo de usuarios/acessos nao encontrado: {export_path}")
+        return
+
+    try:
+        from src.telemetry_analyzer import analyze_export_telemetry
+
+        def progress(index, total, login):
+            if index == 1 or index == total or index % 25 == 0:
+                info(f"Mapeando usuario {index}/{total}: {login}")
+
+        result = analyze_export_telemetry(metrics_path, export_path, OUTPUT_DIR, progress=progress)
+        json_path = os.path.join(OUTPUT_DIR, "telemetry_analysis.json")
+        html_path = os.path.join(OUTPUT_DIR, "telemetry_analysis.html")
+        success(f"Analise JSON salva em: {C['bold']}{json_path}{C['reset']}")
+        success(f"Dashboard HTML salvo em: {C['bold']}{html_path}{C['reset']}")
+        info(f"Rotinas usadas: {result['summary']['routines_used']}")
+        info(f"Candidatas a descarte: {result['summary']['unused_allowed_routines']}")
+        info(f"Uso sem acesso efetivo: {result['summary']['used_without_effective_access']}")
+    except Exception as e:
+        fail(str(e))
+
+
 def show_offline_banner():
     D = C["dim"]; R = C["reset"]; G = C["green"]
     print(f"  {D}─── {G}MODO OFFLINE{D} ─── Dados carregados do export.json ───{R}")
@@ -1271,6 +1305,8 @@ def wizard_ferramentas():
         print(row(f"{L}║{R}    │ {D}Carregar export.json p/ modo offline{R}"))
         print(row(f"{L}║{R}  {B}3{R} │ {W}Limpar tabelas de privilegios{R}"))
         print(row(f"{L}║{R}    │ {D}Script DELETE p/ SYS_RULES e relacionadas{R}"))
+        print(row(f"{L}║{R}  {B}4{R} │ {W}Analisar telemetria{R}"))
+        print(row(f"{L}║{R}    │ {D}Confrontar uso real x acessos exportados{R}"))
         print(row(f"{L}║{R}  {B}0{R} │ {RD}Voltar{R}"))
         print(f"  {L}╚{'═' * BOX}╝{R}")
         print()
@@ -1284,6 +1320,8 @@ def wizard_ferramentas():
             wizard_import()
         elif sub == "3":
             wizard_clean()
+        elif sub == "4":
+            run_telemetry_analysis()
         else:
             print(f"\n  {C['red']}Opcao invalida!{C['reset']}\n")
 

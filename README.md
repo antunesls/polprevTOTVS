@@ -14,6 +14,7 @@ Ferramenta para mapear os acessos de um usuário do Protheus ERP, listando menus
 | **2. Mapear + Privilégios** | Além do mapeamento, gera script SQL para criar um novo grupo de privilégios (`SYS_RULES`) baseado nos acessos do usuário. Gera `output/{login}_privileges.sql` |
 | **3. Mapear + Dashboard** | Mapeia e gera dashboard HTML com gráficos, árvore de menu e tabela pesquisável. Gera `output/dashboard.html` |
 | **4. Menu canônico por módulo** | Gera SQL para criar um menu único por módulo em `MPMENU_*` com todas as rotinas do módulo e vincular usuários em `SYS_USR_MODULE`. Gera `output/canonical_menus.sql` |
+| **Ferramentas > Analisar telemetria** | Confronta o uso real de rotinas coletado em métricas Prometheus com o JSON exportado de usuários/acessos. Gera `output/telemetry_analysis.json` e `output/telemetry_analysis.html` |
 
 ### Destaques do mapeamento
 
@@ -47,6 +48,22 @@ Ferramenta para mapear os acessos de um usuário do Protheus ERP, listando menus
 - Esses dois conceitos aparecem no mesmo relatório, mas não se substituem:
   - `effective_access` responde se a rotina ficou liberada ou não.
   - `access_codes` responde quais códigos sistêmicos estão ativos para o usuário.
+
+### Analise de telemetria
+
+A ferramenta pode confrontar um arquivo de telemetria de rotinas com o export offline de usuarios/acessos. O arquivo usado como exemplo e `output/metrics_20260722_bosal.json`; apesar da extensao, o conteudo segue o formato Prometheus text.
+
+Entradas padrao:
+
+- `output/metrics_20260722_bosal.json`: metricas `protheus_routine_calls_total` e `protheus_routine_user_calls_total`.
+- `output/JSON_F52E2B61-18A1-11d1-B105-00805F49916B1_BOSAL_3.json`: export das tabelas Protheus para montar os acessos efetivos dos usuarios.
+
+Saidas geradas:
+
+- `output/telemetry_analysis.json`: dados estruturados da analise.
+- `output/telemetry_analysis.html`: dashboard com top rotinas, top usuarios por rotina, rotinas liberadas sem uso e uso sem acesso efetivo mapeado.
+
+A lista `unused_allowed_routines` indica rotinas com acesso efetivo mapeado, mas sem uso na telemetria, servindo como candidata a descarte na criacao de novas regras. A lista `used_without_effective_access` mostra usuarios que executaram rotinas sem permissao efetiva correspondente no mapeamento, servindo como ponto de auditoria.
 
 ---
 
