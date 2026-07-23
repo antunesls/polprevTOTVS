@@ -50,7 +50,7 @@ def _profile_group_name(dept, index):
     return f"{prefix}{label[:20 - len(prefix) - len(suffix)]}{suffix}"
 
 
-def build_equivalent_profile_groups(reports, tier1_common, tier2_routines_map, min_users=2, existing_rules=None, routine_details=None):
+def build_equivalent_profile_groups(reports, tier1_common, tier2_routines_map, min_users=2, existing_rules=None, routine_details=None, routine_user_metrics=None):
     groups = {}
     tier1_codes = set(routine_code(code) for code in (tier1_common or set()))
     tier2_by_dept = {
@@ -80,6 +80,11 @@ def build_equivalent_profile_groups(reports, tier1_common, tier2_routines_map, m
         users = sorted(users)
         if len(users) < min_users:
             continue
+        if routine_user_metrics:
+            routine_codes = [routine_code(item) if isinstance(item, dict) else routine_code({"code": str(item)}) for item in routines]
+            users = [u for u in users if _user_has_any_telemetry(u, routine_codes, routine_user_metrics)]
+            if len(users) < min_users:
+                continue
         counters[dept] = counters.get(dept, 0) + 1
         routines = []
         for code, permissions in signature:

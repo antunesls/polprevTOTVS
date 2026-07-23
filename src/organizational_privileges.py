@@ -9,7 +9,7 @@ from src.config import OUTPUT_DIR
 from src.discovery import column_exists
 from src.database import fetch_all, fetch_dicts
 from src.privilege_generator import extract_auto_rule_sequence, format_auto_rule_id, save_report_json
-from src.tier3 import apply_department_canonicalization, build_department_common_routines, normalize_tier3_sets, routine_code, routine_permissions
+from src.tier3 import apply_department_canonicalization, build_department_common_routines, load_existing_rules, match_profile_to_existing_rules, normalize_tier3_sets, routine_code, routine_permissions
 
 C = {
     "reset": "\033[0m",   "bold": "\033[1m",
@@ -77,6 +77,8 @@ class OrganizationalPrivilegeGenerator:
         self.empresa_name = empresa_name
         self.conn = conn
         self._resolved_cols = {}
+        self._routine_user_metrics = _load_routine_user_metrics()
+        self._existing_rules = load_existing_rules(self.conn) or {}
 
         self.tier1_routines = set()
         self.tier2_routines = {}
@@ -271,11 +273,10 @@ class OrganizationalPrivilegeGenerator:
         raw_clusters = llm_result.get("clusters", [])
         print(f"  {D}LLM retornou {len(raw_clusters)} conjuntos brutos{R}")
 
-        routine_user_metrics = _load_routine_user_metrics()
-        clusters = normalize_tier3_sets(raw_clusters, self.reports, routine_user_metrics=routine_user_metrics)
-        if routine_user_metrics:
+        clusters = normalize_tier3_sets(raw_clusters, self.reports, routine_user_metrics=self._routine_user_metrics)
+        if self._routine_user_metrics:
             total_assigned = sum(len(c.get("users", [])) for c in clusters)
-            print(f"  {D}Telemetria por usuario ativa: {len(routine_user_metrics)} rotinas com dados de uso{R}")
+            print(f"  {D}Telemetria por usuario ativa: {len(self._routine_user_metrics)} rotinas com dados de uso{R}")
         print(f"  {D}Validacao local: {len(clusters)} conjuntos aproveitados | {max(len(raw_clusters) - len(clusters), 0)} descartados{R}")
         if not clusters:
             print(f"  {Y}LLM retornou conjuntos, mas todos foram descartados na validacao local. Alternando para modo manual (Jaccard).{R}")
@@ -449,11 +450,16 @@ class OrganizationalPrivilegeGenerator:
                 for m in members:
                     common &= user_routines[m]
                 if common:
-                    clusters.append({
-                        "members": sorted(members),
-                        "common_routines": sorted(common),
-                        "depts": sorted(set(user_dept.get(m, "") for m in members)),
-                    })
+                    members = sorted(members)
+                    if self._routine_user_metrics:
+                        from src.tier3 import _user_has_any_telemetry
+                        members = [m for m in members if _user_has_any_telemetry(m, sorted(common), self._routine_user_metrics)]
+                    if len(members) >= MIN_CLUSTER_SIZE:
+                        clusters.append({
+                            "members": members,
+                            "common_routines": sorted(common),
+                            "depts": sorted(set(user_dept.get(m, "") for m in members)),
+                        })
 
         if not clusters:
             print(f"  {D}Nenhum conjunto manual detectado por similaridade.{R}")
@@ -594,6 +600,9 @@ class OrganizationalPrivilegeGenerator:
             valid_users = {rep["user"] for rep in self.reports}
 
             all_users = sorted(u for u in promoted_users_map.keys() if u in valid_users)
+            if self._routine_user_metrics:
+                from src.tier3 import _user_has_any_telemetry
+                all_users = [u for u in all_users if _user_has_any_telemetry(u, list(promoted_routines), self._routine_user_metrics)]
             if len(all_users) < min_users:
                 print(f"  {D}Residuais {prefix}: apenas {len(all_users)} usuario(s), ignorado{R}")
                 continue
@@ -614,11 +623,18 @@ class OrganizationalPrivilegeGenerator:
                     else rt
                 )
 
-            self.tier3_routines[name] = {
+            existing_match = match_profile_to_existing_rules(routines_out, self._existing_rules)
+            stored_name = name
+            if existing_match:
+                stored_name = existing_match
+                print(f"  {G}Reaproveitando {existing_match}: {name} ({len(all_users)} usuarios, {len(promoted_routines)} rotinas){R}")
+            else:
+                print(f"  {G}Promovido {domain_label}: {name} ({len(all_users)} usuarios, {len(promoted_routines)} rotinas){R}")
+
+            self.tier3_routines[stored_name] = {
                 "routines": routines_out,
                 "members": all_users,
             }
-            print(f"  {G}Promovido {domain_label}: {name} ({len(all_users)} usuarios, {len(promoted_routines)} rotinas){R}")
             sample = sorted(promoted_routines)[:6]
             print(f"    {D}Rotinas: {', '.join(sample)}{'...' if len(promoted_routines) > 6 else ''}{R}")
             promoted_count += 1
@@ -641,6 +657,9 @@ class OrganizationalPrivilegeGenerator:
                 user for user, user_rt_set in self.tier4_routines.items()
                 if rt in user_rt_set
             )
+            if self._routine_user_metrics:
+                from src.tier3 import _user_has_any_telemetry
+                users = [u for u in users if _user_has_any_telemetry(u, [rt], self._routine_user_metrics)]
             if len(users) < min_users:
                 continue
 
@@ -669,11 +688,18 @@ class OrganizationalPrivilegeGenerator:
                 else rt
             ]
 
-            self.tier3_routines[name] = {
+            existing_match = match_profile_to_existing_rules(routines_out, self._existing_rules)
+            stored_name = name
+            if existing_match:
+                stored_name = existing_match
+                print(f"  {G}Reaproveitando {existing_match}: {name} ({len(users)} usuarios, rotina {rt}){R}")
+            else:
+                print(f"  {G}Promovido individual {domain_label}: {name} ({len(users)} usuarios, rotina {rt}){R}")
+
+            self.tier3_routines[stored_name] = {
                 "routines": routines_out,
                 "members": users,
             }
-            print(f"  {G}Promovido individual {domain_label}: {name} ({len(users)} usuarios, rotina {rt}){R}")
             singles_promoted += 1
 
         if promoted_count or singles_promoted:

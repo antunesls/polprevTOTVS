@@ -837,7 +837,7 @@ def _run_org_analysis_with_reports(all_reports):
     tier2_routines_map = {}
     for d in tier2_data:
         tier2_routines_map[d["depto"]] = set(r["code"] for r in d["routines"])
-    profile_groups = build_equivalent_profile_groups(all_reports, tier1_common, tier2_routines_map)
+    profile_groups = build_equivalent_profile_groups(all_reports, tier1_common, tier2_routines_map, routine_user_metrics=_load_routine_user_metrics())
     if profile_groups:
         tier3_clusters.extend(profile_groups)
         print(f"  Perfis equivalentes automaticos: {G}{len(profile_groups)}{R}")
@@ -2846,18 +2846,12 @@ def run_organizational_analysis():
                 "routines": dept_routines,
                 "users": [r["user"] for r in reps],
             })
-            print(f"  {C['green']}{dept_name}{C['reset']}: {len(reps)} usuarios, {len(common)} rotinas comuns")
-    print(f"  Departamentos com rotinas comuns: {C['green']}{len(tier2_data)}{C['reset']}")
-
-    section("TIER 3 — PERFIS E CONJUNTOS FUNCIONAIS")
-    tier3_clusters = []
-    tier3_unclustered = []
 
     tier2_routines_map = {}
     for d in tier2_data:
         tier2_routines_map[d["depto"]] = set(r["code"] for r in d["routines"])
 
-    profile_groups = build_equivalent_profile_groups(all_reports, tier1_common, tier2_routines_map)
+    profile_groups = build_equivalent_profile_groups(all_reports, tier1_common, tier2_routines_map, routine_user_metrics=_load_routine_user_metrics())
     if profile_groups:
         tier3_clusters.extend(profile_groups)
         print(f"  Perfis equivalentes automaticos: {C['green']}{len(profile_groups)}{C['reset']}")

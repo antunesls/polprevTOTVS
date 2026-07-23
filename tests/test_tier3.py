@@ -578,13 +578,14 @@ class Tier3PromptTest(unittest.TestCase):
     def test_prompt_is_routine_catalog_not_department_user_grouping(self):
         from src.llm_categorizer import build_prompt
 
-        prompt = build_prompt([
+        result = build_prompt([
             {
                 "user": "joao",
                 "department": "EXPEDICAO",
                 "routines": ["ETQ001 - Impressao de etiqueta", "WMS010 - Separacao"],
             }
         ])
+        prompt = result["prompt"]
 
         self.assertIn("Catalogo de rotinas", prompt)
         self.assertIn("ETQ001 - Impressao de etiqueta", prompt)
@@ -601,7 +602,8 @@ class Tier3PromptTest(unittest.TestCase):
                 routines.append(f"ROT{routine_idx:05d} - Descricao longa da rotina {routine_idx}")
             users_data.append({"user": f"u{user_idx}", "routines": routines})
 
-        prompt = build_prompt(users_data, max_routines=500)
+        result = build_prompt(users_data, max_routines=500)
+        prompt = result["prompt"]
 
         self.assertIn("Catalogo limitado as 500 rotinas", prompt)
         self.assertLess(len(prompt), 70000)
@@ -609,10 +611,11 @@ class Tier3PromptTest(unittest.TestCase):
     def test_prompt_includes_permission_profiles(self):
         from src.llm_categorizer import build_prompt
 
-        prompt = build_prompt([
+        result = build_prompt([
             {"user": "joao", "routines": [{"code": "MATA010", "description": "Cadastro", "permissions": ["Visualizar", "Alterar"]}]},
             {"user": "maria", "routines": [{"code": "MATA010", "description": "Cadastro", "permissions": ["Visualizar"]}]},
         ])
+        prompt = result["prompt"]
 
         self.assertIn("MATA010 - Cadastro", prompt)
         self.assertIn("Perfis de permissao", prompt)
@@ -676,12 +679,13 @@ class Tier3PromptTest(unittest.TestCase):
     def test_compact_prompt_requests_fewer_sets_and_routines(self):
         from src.llm_categorizer import build_prompt
 
-        prompt = build_prompt([
+        result = build_prompt([
             {"user": "joao", "routines": [
                 {"code": "MATA010", "description": "Pedido de compra", "permissions": ["Visualizar"]},
                 {"code": "MATA020", "description": "Cotacao de compra", "permissions": ["Visualizar"]},
             ]}
         ], max_routines=150)
+        prompt = result["prompt"]
 
         self.assertIn("No maximo 12 conjuntos", prompt)
         self.assertIn("No maximo 20 rotinas por conjunto", prompt)
@@ -689,7 +693,7 @@ class Tier3PromptTest(unittest.TestCase):
     def test_build_prompt_filters_routines_by_min_users(self):
         from src.llm_categorizer import build_prompt
 
-        prompt = build_prompt([
+        result = build_prompt([
             {"user": "joao", "routines": [
                 {"code": "MATA010", "description": "Compartilhada por 2"},
                 {"code": "MATA020", "description": "Compartilhada por 2"},
@@ -700,6 +704,7 @@ class Tier3PromptTest(unittest.TestCase):
                 {"code": "MATA040", "description": "So maria usa"},
             ]},
         ], min_users=2)
+        prompt = result["prompt"]
 
         self.assertIn("Catalogo filtrado: apenas rotinas com >= 2 usuarios (2 de 3 rotinas)", prompt)
         self.assertIn("MATA010", prompt)
@@ -709,10 +714,11 @@ class Tier3PromptTest(unittest.TestCase):
     def test_build_prompt_without_min_users_includes_all(self):
         from src.llm_categorizer import build_prompt
 
-        prompt = build_prompt([
+        result = build_prompt([
             {"user": "joao", "routines": [{"code": "MATA010"}]},
             {"user": "maria", "routines": [{"code": "MATA010"}, {"code": "MATA040"}]},
         ])
+        prompt = result["prompt"]
 
         self.assertNotIn("Catalogo filtrado", prompt)
         self.assertIn("MATA040", prompt)
@@ -720,7 +726,7 @@ class Tier3PromptTest(unittest.TestCase):
     def test_prompt_includes_prefix_domain_hints(self):
         from src.llm_categorizer import build_prompt
 
-        prompt = build_prompt([
+        result = build_prompt([
             {"user": "joao", "routines": [
                 {"code": "FINR355", "description": "Relatorio financeiro"},
                 {"code": "MATR010", "description": "Relatorio de materiais"},
@@ -729,6 +735,7 @@ class Tier3PromptTest(unittest.TestCase):
                 {"code": "FINR355", "description": "Relatorio financeiro"},
             ]},
         ], min_users=1)
+        prompt = result["prompt"]
 
         self.assertIn("DICA DE CLASSIFICACAO POR PREFIXO", prompt)
         self.assertIn("FINR", prompt)

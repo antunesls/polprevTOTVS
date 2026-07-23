@@ -219,6 +219,10 @@ class SqlProgressOutputTest(unittest.TestCase):
 
 class SharedResidualPromotionTest(unittest.TestCase):
     def setUp(self):
+        patcher = patch("src.organizational_privileges._load_routine_user_metrics", return_value=None)
+        self.mock_telemetry = patcher.start()
+        self.addCleanup(patcher.stop)
+
         self.reports = [
             {
                 "user": "AGALATTI",

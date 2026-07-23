@@ -19,6 +19,8 @@ MAX_PROMPT_ROUTINES = None
 RETRY_PROMPT_ROUTINES = 150
 MAX_ROUTINE_DESC_LEN = 60
 
+_UUID_PATTERN = re.compile(r'^([A-Za-z0-9]+)_([A-Fa-f0-9]{8}-[A-Fa-f0-9]{4}-[A-Fa-f0-9]{4}-[A-Fa-f0-9]{4}-[A-Fa-f0-9]{12})$')
+
 if os.name == "nt":
     os.system("")
 
@@ -45,6 +47,30 @@ def build_prompt(users_data, max_routines=MAX_PROMPT_ROUTINES, min_users=None):
             profile_key = tuple(permissions)
             routines_map[code]["profiles"][profile_key] = routines_map[code]["profiles"].get(profile_key, 0) + 1
 
+    prefix_groups = {}
+    residue = {}
+    for code, info in routines_map.items():
+        m = _UUID_PATTERN.match(code)
+        if m:
+            prefix_key = m.group(1) + "_*"
+            if prefix_key not in prefix_groups:
+                prefix_groups[prefix_key] = {"codes": [], "users": 0, "profiles": {}}
+            prefix_groups[prefix_key]["codes"].append(code)
+            prefix_groups[prefix_key]["users"] += info["users"]
+            for profile, count in info.get("profiles", {}).items():
+                prefix_groups[prefix_key]["profiles"][profile] = prefix_groups[prefix_key]["profiles"].get(profile, 0) + count
+            desc_value = info.get("desc", "").strip()
+            if desc_value and not prefix_groups[prefix_key].get("desc"):
+                prefix_groups[prefix_key]["desc"] = desc_value
+        else:
+            residue[code] = info
+
+    for group_name, group_info in prefix_groups.items():
+        n = len(group_info["codes"])
+        group_info["desc"] = f"({n} variacoes) {group_info.get('desc', '')}"
+        residue[group_name] = group_info
+
+    routines_map = residue
     total_all_routines = len(routines_map)
 
     if min_users is not None and min_users > 1:
@@ -82,7 +108,7 @@ def build_prompt(users_data, max_routines=MAX_PROMPT_ROUTINES, min_users=None):
             f"de um total de {total_routines}, para respeitar o limite de contexto da LLM."
         )
 
-    return f"""Voce e um analista de sistemas ERP Protheus (TOTVS) especializado em privilegios por camada organizacional.
+    prompt = f"""Voce e um analista de sistemas ERP Protheus (TOTVS) especializado em privilegios por camada organizacional.
 
 Catalogo de rotinas do sistema com codigo, descricao e quantidade de usuarios que acessam cada rotina.{limit_notice}
 Cada rotina e um codigo como MATA010, FINA020, COMSV001, etc.
@@ -132,6 +158,7 @@ IMPORTANTE: Responda EXCLUSIVAMENTE com JSON puro, sem markdown:
   ],
   "unclustered": []
 }}"""
+    return {"prompt": prompt, "prefix_groups": prefix_groups}
 
 
 def build_department_prompt(department_names):
@@ -340,6 +367,25 @@ def _try_parse(json_str):
         return None
 
 
+def _expand_prefix_codes(result, prefix_groups):
+    if not prefix_groups or not result:
+        return
+    for cluster in result.get("clusters", []) or []:
+        routines = cluster.get("routines", [])
+        if not routines:
+            continue
+        expanded = []
+        for raw in routines:
+            code = routine_code(raw)
+            group_info = prefix_groups.get(code, {})
+            if group_info and "codes" in group_info:
+                for orig_code in group_info["codes"]:
+                    expanded.append(orig_code)
+            else:
+                expanded.append(raw)
+        cluster["routines"] = expanded
+
+
 def suggest_clusters(users_data):
     G = C["green"]; CY = C["cyan"]; Y = C["yellow"]; R = C["reset"]; D = C["dim"]; RD = C["red"]
 
@@ -365,13 +411,15 @@ def suggest_clusters(users_data):
 
     response_text = None
     result = None
+    prefix_groups = {}
     attempt_limits = (MAX_PROMPT_ROUTINES, MAX_PROMPT_ROUTINES, MAX_PROMPT_ROUTINES, RETRY_PROMPT_ROUTINES)
     for attempt_idx, prompt_limit in enumerate(attempt_limits, 1):
         sent = filtered_routine_count if prompt_limit is None else min(prompt_limit, filtered_routine_count)
         print(f"  {D}Entrada: {len(users_data)} usuarios | {len(unique_routines)} rotinas unicas | >= {min_users} usuarios: {filtered_routine_count} | catalogo enviado: {sent}{R}")
         print(f"  {D}Tentativa {attempt_idx}/{len(attempt_limits)}{R}")
-        prompt = build_prompt(users_data, max_routines=prompt_limit, min_users=min_users)
-        response_text = call_openrouter(prompt)
+        prompt_result = build_prompt(users_data, max_routines=prompt_limit, min_users=min_users)
+        prefix_groups = prompt_result.get("prefix_groups", {})
+        response_text = call_openrouter(prompt_result["prompt"])
 
         is_last = (attempt_idx == len(attempt_limits))
         is_reduced_next = (attempt_idx < len(attempt_limits) and attempt_limits[attempt_idx] is not None and (attempt_limits[attempt_idx - 1] is None or attempt_limits[attempt_idx] < attempt_limits[attempt_idx - 1]))
@@ -416,6 +464,8 @@ def suggest_clusters(users_data):
         else:
             print(f"  {RD}Fallback regex tambem falhou. Use modo manual (Jaccard).{R}")
             return None
+
+    _expand_prefix_codes(result, prefix_groups)
 
     clusters = result.get("clusters", [])
 
